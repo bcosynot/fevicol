@@ -19,16 +19,20 @@ rustup component add rust-src
 echo "Installing additional tools..."
 cargo install cargo-expand || true
 
-# Set up udev rules for probe-rs (if running with USB passthrough)
-echo "Configuring USB permissions..."
-cat > /tmp/99-probe-rs.rules << 'EOF'
+# Set up udev rules for probe-rs (only if /dev/bus/usb exists - i.e., local dev with USB passthrough)
+if [ -d "/dev/bus/usb" ]; then
+    echo "Configuring USB permissions..."
+    cat > /tmp/99-probe-rs.rules << 'EOF'
 # probe-rs rules
 SUBSYSTEM=="usb", ATTR{idVendor}=="303a", MODE="0666"
 SUBSYSTEM=="usb", ATTR{idVendor}=="10c4", MODE="0666"
 EOF
-sudo mv /tmp/99-probe-rs.rules /etc/udev/rules.d/ || true
-sudo udevadm control --reload-rules || true
-sudo udevadm trigger || true
+    sudo mv /tmp/99-probe-rs.rules /etc/udev/rules.d/ || true
+    sudo udevadm control --reload-rules || true
+    sudo udevadm trigger || true
+else
+    echo "USB devices not available (CI environment). Skipping udev configuration."
+fi
 
 echo "Development environment setup complete!"
 echo ""

@@ -47,20 +47,53 @@ cargo clippy --all-features --workspace -- -D warnings
 
 ## Flashing to Hardware
 
-To flash firmware to a connected ESP32-C6 device:
+The default configuration is optimized for CI/CD environments and does not include USB passthrough. To flash firmware to a physical ESP32-C6 device, you need to enable USB access:
 
-1. Connect the device via USB
-2. The container has USB passthrough enabled with `--privileged` mode
-3. Run: `cargo run`
+### Option 1: Local devcontainer.json Override
 
-Note: USB passthrough works best with Docker Desktop or local VS Code with Dev Containers. It may have limitations in browser-based Codespaces.
+Create `.devcontainer/devcontainer.local.json` (git-ignored):
+
+```json
+{
+	"mounts": [
+		"source=/dev/bus/usb,target=/dev/bus/usb,type=bind"
+	],
+	"runArgs": [
+		"--privileged"
+	]
+}
+```
+
+### Option 2: Docker CLI
+
+Run the container directly with USB access:
+
+```bash
+docker run --privileged -v /dev/bus/usb:/dev/bus/usb -it <container-id>
+```
+
+### Option 3: Modify devcontainer.json
+
+For permanent local changes, add to `.devcontainer/devcontainer.json`:
+
+```json
+"mounts": [
+	"source=/dev/bus/usb,target=/dev/bus/usb,type=bind"
+],
+"runArgs": [
+	"--privileged"
+]
+```
+
+Note: USB passthrough works best with Docker Desktop or local VS Code with Dev Containers. It is not available in GitHub Codespaces or CI environments.
 
 ## Configuration Details
 
 - **Base Image**: Microsoft Rust devcontainer (Debian Bookworm)
 - **Post-Create Setup**: Automatically installs probe-rs and configures Rust target
-- **USB Access**: Configured for ESP32 USB devices (vendor IDs: 303a, 10c4)
+- **USB Access**: Optional (see "Flashing to Hardware" section for enabling)
 - **VS Code Settings**: Pre-configured rust-analyzer for RISC-V embedded development
+- **CI/CD Ready**: Works in GitHub Actions and Codespaces without modification
 
 ## Troubleshooting
 
