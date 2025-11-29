@@ -13,9 +13,9 @@ use esp_hal::timer::timg::TimerGroup;
 use panic_rtt_target as _;
 
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
+use embassy_time::{Duration, Timer};
 
 use smoltcp::wire::Ipv4Address;
 
@@ -35,11 +35,11 @@ esp_bootloader_esp_idf::esp_app_desc!();
 static NETWORK_READY: Signal<CriticalSectionRawMutex, Ipv4Address> = Signal::new();
 
 // Calibration constants from sensor calibration routine
-const SENSOR_DRY: u16 = 2188;  // ADC value when sensor is in air (0% moisture)
-const SENSOR_WET: u16 = 4095;  // ADC value when sensor is in water (100% moisture)
+const SENSOR_DRY: u16 = 2188; // ADC value when sensor is in air (0% moisture)
+const SENSOR_WET: u16 = 4095; // ADC value when sensor is in water (100% moisture)
 
 // Watering threshold: trigger pump when moisture falls below this percentage
-const MOISTURE_THRESHOLD: u8 = 30;  // 30% moisture
+const MOISTURE_THRESHOLD: u8 = 30; // 30% moisture
 
 /// Convert raw ADC reading to moisture percentage (0-100%)
 fn raw_to_moisture_percent(raw: u16) -> u8 {
@@ -202,13 +202,14 @@ async fn main(spawner: Spawner) -> ! {
 
                 // Create Wi-Fi controller and interfaces
                 let wifi_cfg = esp_radio::wifi::Config::default();
-                let (wifi, ifaces) = match esp_radio::wifi::new(radio_init, peripherals.WIFI, wifi_cfg) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        error!("wifi new() failed: {:?}", e);
-                        loop {}
-                    }
-                };
+                let (wifi, ifaces) =
+                    match esp_radio::wifi::new(radio_init, peripherals.WIFI, wifi_cfg) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            error!("wifi new() failed: {:?}", e);
+                            loop {}
+                        }
+                    };
 
                 // Configure as Wi‑Fi station (client)
                 // BuilderLite pattern: use with_ methods
@@ -240,7 +241,10 @@ async fn main(spawner: Spawner) -> ! {
     // spawner.spawn(sensor_task(adc1, a0)).ok();
 
     info!("application: all tasks spawned");
-    info!("sensor: calibration - dry={}, wet={}", SENSOR_DRY, SENSOR_WET);
+    info!(
+        "sensor: calibration - dry={}, wet={}",
+        SENSOR_DRY, SENSOR_WET
+    );
     info!("sensor: watering threshold = {}%", MOISTURE_THRESHOLD);
 
     // Main sensor monitoring loop
@@ -254,11 +258,15 @@ async fn main(spawner: Spawner) -> ! {
                 let moisture_percent = raw_to_moisture_percent(raw);
 
                 if moisture_percent < MOISTURE_THRESHOLD {
-                    warn!("sensor: moisture={}% (raw={}), BELOW threshold {}% - pump should activate",
-                          moisture_percent, raw, MOISTURE_THRESHOLD);
+                    warn!(
+                        "sensor: moisture={}% (raw={}), BELOW threshold {}% - pump should activate",
+                        moisture_percent, raw, MOISTURE_THRESHOLD
+                    );
                 } else {
-                    info!("sensor: moisture={}% (raw={}), above threshold",
-                          moisture_percent, raw);
+                    info!(
+                        "sensor: moisture={}% (raw={}), above threshold",
+                        moisture_percent, raw
+                    );
                 }
 
                 // TODO: Publish to MQTT when implemented
