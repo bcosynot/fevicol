@@ -27,14 +27,6 @@
 		}
 	},
 
-	"mounts": [
-		"source=/dev/bus/usb,target=/dev/bus/usb,type=bind"
-	],
-
-	"runArgs": [
-		"--privileged"
-	],
-
 	"remoteEnv": {
 		"DEFMT_LOG": "info"
 	}
