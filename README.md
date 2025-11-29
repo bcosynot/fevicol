@@ -77,9 +77,14 @@
  ## Environment Variables and Features
  - DEFMT_LOG — defmt log level (default: "info"). Accepts: `trace|debug|info|warn|error`.
  - WIFI_SSID / WIFI_PASS — compile‑time credentials used when the `local_secrets` feature is NOT enabled.
- - Feature `local_secrets` — allows storing credentials in a git‑ignored `src/secrets.rs`:
+ - Feature `local_secrets` — allows storing credentials in a git‑ignored `src/bin/secrets.rs`:
+   ```bash
+   # Copy the template and edit with your credentials
+   cp src/bin/secrets.rs.example src/bin/secrets.rs
+   # Then edit src/bin/secrets.rs with your actual SSID/password
+   ```
    ```rust
-   // src/secrets.rs (git‑ignored)
+   // src/bin/secrets.rs (git‑ignored)
    pub const WIFI_SSID: &str = "YourSSID";
    pub const WIFI_PASS: &str = "YourPassword";
    ```

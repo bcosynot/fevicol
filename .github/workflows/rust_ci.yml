@@ -37,5 +37,7 @@ jobs:
           components: rust-src, rustfmt, clippy
       - name: Enable caching
         uses: Swatinem/rust-cache@v2
+      - name: Create secrets.rs from template
+        run: cp src/bin/secrets.rs.example src/bin/secrets.rs
       - name: Run command
         run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
