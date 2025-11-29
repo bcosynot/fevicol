@@ -1,0 +1,41 @@
+{
+	"name": "Fevicol ESP32-C6 Dev Container",
+	"image": "mcr.microsoft.com/devcontainers/rust:1-1-bookworm",
+
+	"features": {
+		"ghcr.io/devcontainers/features/common-utils:2": {
+			"installZsh": true,
+			"configureZshAsDefaultShell": true,
+			"installOhMyZsh": true
+		}
+	},
+
+	"postCreateCommand": "bash .devcontainer/setup.sh",
+
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"rust-lang.rust-analyzer",
+				"tamasfe.even-better-toml",
+				"serayuzgur.crates"
+			],
+			"settings": {
+				"rust-analyzer.checkOnSave.allTargets": false,
+				"rust-analyzer.cargo.target": "riscv32imac-unknown-none-elf",
+				"rust-analyzer.cargo.features": "all"
+			}
+		}
+	},
+
+	"mounts": [
+		"source=/dev/bus/usb,target=/dev/bus/usb,type=bind"
+	],
+
+	"runArgs": [
+		"--privileged"
+	],
+
+	"remoteEnv": {
+		"DEFMT_LOG": "info"
+	}
+}
