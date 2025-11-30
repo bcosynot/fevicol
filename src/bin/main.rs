@@ -20,6 +20,9 @@ use embassy_time::{Duration, Instant, Timer};
 
 use static_cell::StaticCell;
 
+use core::fmt::Write;
+use heapless::String;
+
 // MQTT imports - configuration setup for future implementation
 // Note: Full rust-mqtt integration with esp-radio's smoltcp stack requires
 // additional adapter code that will be implemented in a future step
@@ -52,8 +55,22 @@ const MQTT_BROKER_HOST: &str = "192.168.1.100"; // Replace with your broker IP o
 const MQTT_BROKER_PORT: u16 = 1883;
 const MQTT_KEEP_ALIVE_SECS: u16 = 60;
 const MQTT_SESSION_EXPIRY_SECS: u32 = 3600; // 1 hour - supports battery-powered use
+#[allow(dead_code)] // Will be used when MQTT client is implemented
 const MQTT_USERNAME: &str = ""; // Empty for no authentication
+#[allow(dead_code)] // Will be used when MQTT client is implemented
 const MQTT_PASSWORD: &str = ""; // Empty for no authentication
+
+// Home Assistant MQTT Discovery Configuration
+// Discovery topics follow the pattern: homeassistant/{component}/{device_id}/{sensor_id}/config
+// State topics follow the pattern: fevicol/{device_id}/{sensor_id}/{metric}
+
+/// Project version from Cargo.toml for device metadata
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Home Assistant device information (shared across all entities)
+const DEVICE_NAME: &str = "Fevicol Plant Monitor";
+const DEVICE_MANUFACTURER: &str = "Fevicol Project";
+const DEVICE_MODEL: &str = "ESP32-C6 Moisture Sensor";
 
 /// Sensor reading data structure for inter-task communication
 #[derive(Clone, Copy, defmt::Format)]
@@ -97,6 +114,191 @@ fn raw_to_moisture_percent(raw: u16) -> u8 {
     let offset = raw - SENSOR_DRY;
     let percent = (offset as u32 * 100) / range as u32;
     percent.min(100) as u8
+}
+
+// ============================================================================
+// Home Assistant MQTT Discovery Helpers
+// ============================================================================
+
+/// Build a Home Assistant discovery topic
+/// Format: homeassistant/{component}/{device_id}/{entity_id}/config
+fn build_discovery_topic(component: &str, device_id: &str, entity_id: &str) -> String<128> {
+    let mut topic = String::new();
+    write!(
+        topic,
+        "homeassistant/{}/{}/{}/config",
+        component, device_id, entity_id
+    )
+    .ok();
+    topic
+}
+
+/// Build a state topic for sensor readings
+/// Format: fevicol/{device_id}/{sensor_id}/{metric}
+fn build_state_topic(device_id: &str, sensor_id: &str, metric: &str) -> String<128> {
+    let mut topic = String::new();
+    write!(topic, "fevicol/{}/{}/{}", device_id, sensor_id, metric).ok();
+    topic
+}
+
+/// Build availability topic for device online/offline status
+/// Format: fevicol/{device_id}/status
+fn build_availability_topic(device_id: &str) -> String<64> {
+    let mut topic = String::new();
+    write!(topic, "fevicol/{}/status", device_id).ok();
+    topic
+}
+
+/// Create Home Assistant discovery payload for moisture percentage sensor
+fn create_moisture_discovery_payload(device_id: &str, sensor_id: &str) -> String<1024> {
+    let mut payload = String::new();
+    let state_topic = build_state_topic(device_id, sensor_id, "moisture");
+    let availability_topic = build_availability_topic(device_id);
+    let unique_id = format_unique_id(device_id, sensor_id, "moisture");
+
+    // Build JSON manually (no serde_json in no_std)
+    write!(payload, "{{").ok();
+    write!(payload, "\"unique_id\":\"{}\",", unique_id.as_str()).ok();
+    write!(payload, "\"name\":\"Moisture Sensor\",").ok();
+    write!(payload, "\"state_topic\":\"{}\",", state_topic.as_str()).ok();
+    write!(payload, "\"device_class\":\"moisture\",").ok();
+    write!(payload, "\"unit_of_measurement\":\"%\",").ok();
+    write!(payload, "\"icon\":\"mdi:water-percent\",").ok();
+    write!(
+        payload,
+        "\"availability_topic\":\"{}\",",
+        availability_topic.as_str()
+    )
+    .ok();
+    write!(payload, "\"payload_available\":\"online\",").ok();
+    write!(payload, "\"payload_not_available\":\"offline\",").ok();
+
+    // Add device information
+    write!(payload, "\"device\":{{").ok();
+    write!(
+        payload,
+        "\"identifiers\":[\"{}\"],",
+        device_id.replace('-', "_")
+    )
+    .ok();
+    write!(payload, "\"name\":\"{} - {}\",", DEVICE_NAME, device_id).ok();
+    write!(payload, "\"model\":\"{}\",", DEVICE_MODEL).ok();
+    write!(payload, "\"manufacturer\":\"{}\",", DEVICE_MANUFACTURER).ok();
+    write!(payload, "\"sw_version\":\"{}\"", VERSION).ok();
+    write!(payload, "}}").ok(); // close device
+
+    write!(payload, "}}").ok(); // close root
+    payload
+}
+
+/// Create Home Assistant discovery payload for raw ADC sensor (debugging)
+fn create_raw_discovery_payload(device_id: &str, sensor_id: &str) -> String<1024> {
+    let mut payload = String::new();
+    let state_topic = build_state_topic(device_id, sensor_id, "raw");
+    let availability_topic = build_availability_topic(device_id);
+    let unique_id = format_unique_id(device_id, sensor_id, "raw");
+
+    // Build JSON manually
+    write!(payload, "{{").ok();
+    write!(payload, "\"unique_id\":\"{}\",", unique_id.as_str()).ok();
+    write!(payload, "\"name\":\"Moisture Raw ADC\",").ok();
+    write!(payload, "\"state_topic\":\"{}\",", state_topic.as_str()).ok();
+    write!(payload, "\"unit_of_measurement\":\"ADC\",").ok();
+    write!(payload, "\"icon\":\"mdi:chip\",").ok();
+    write!(
+        payload,
+        "\"availability_topic\":\"{}\",",
+        availability_topic.as_str()
+    )
+    .ok();
+    write!(payload, "\"payload_available\":\"online\",").ok();
+    write!(payload, "\"payload_not_available\":\"offline\",").ok();
+
+    // Add device information (same device as moisture sensor)
+    write!(payload, "\"device\":{{").ok();
+    write!(
+        payload,
+        "\"identifiers\":[\"{}\"],",
+        device_id.replace('-', "_")
+    )
+    .ok();
+    write!(payload, "\"name\":\"{} - {}\",", DEVICE_NAME, device_id).ok();
+    write!(payload, "\"model\":\"{}\",", DEVICE_MODEL).ok();
+    write!(payload, "\"manufacturer\":\"{}\",", DEVICE_MANUFACTURER).ok();
+    write!(payload, "\"sw_version\":\"{}\"", VERSION).ok();
+    write!(payload, "}}").ok(); // close device
+
+    write!(payload, "}}").ok(); // close root
+    payload
+}
+
+/// Format a unique ID for Home Assistant entities
+/// Format: {device_id}_{sensor_id}_{metric}
+fn format_unique_id(device_id: &str, sensor_id: &str, metric: &str) -> String<64> {
+    let mut id = String::new();
+    // Replace hyphens with underscores for valid entity IDs
+    write!(
+        id,
+        "{}_{}_{}",
+        device_id.replace('-', "_"),
+        sensor_id.replace('-', "_"),
+        metric
+    )
+    .ok();
+    id
+}
+
+/// Publish Home Assistant discovery messages for all sensors
+/// This function should be called after successful MQTT connection
+///
+/// Note: This is currently a placeholder implementation that demonstrates the structure.
+/// Full MQTT publishing with rust-mqtt will be implemented in a future step.
+/// Discovery messages must be published with retain=true and QoS 0 or 1.
+async fn publish_discovery(device_id: &str, sensor_id: &str) {
+    info!("mqtt: publishing Home Assistant discovery messages...");
+
+    // Publish availability topic first (online status)
+    let availability_topic = build_availability_topic(device_id);
+    info!(
+        "mqtt: [PLACEHOLDER] would publish to '{}' payload='online' (retain=true)",
+        availability_topic.as_str()
+    );
+
+    // Small delay between publishes to avoid overwhelming the broker
+    Timer::after(Duration::from_millis(100)).await;
+
+    // Publish moisture sensor discovery
+    let moisture_topic = build_discovery_topic("sensor", device_id, "moisture");
+    let moisture_payload = create_moisture_discovery_payload(device_id, sensor_id);
+    info!(
+        "mqtt: [PLACEHOLDER] would publish discovery to '{}'",
+        moisture_topic.as_str()
+    );
+    info!("mqtt:   payload length: {} bytes", moisture_payload.len());
+    info!("mqtt:   payload: {}", moisture_payload.as_str());
+
+    // Small delay between publishes
+    Timer::after(Duration::from_millis(100)).await;
+
+    // Publish raw ADC sensor discovery
+    let raw_topic = build_discovery_topic("sensor", device_id, "raw");
+    let raw_payload = create_raw_discovery_payload(device_id, sensor_id);
+    info!(
+        "mqtt: [PLACEHOLDER] would publish discovery to '{}'",
+        raw_topic.as_str()
+    );
+    info!("mqtt:   payload length: {} bytes", raw_payload.len());
+    info!("mqtt:   payload: {}", raw_payload.as_str());
+
+    info!("mqtt: Home Assistant discovery complete");
+
+    // TODO: In actual implementation, this function will:
+    // 1. Take MQTT client reference as parameter
+    // 2. Publish availability topic with "online" (retain=true)
+    // 3. Publish moisture discovery config (retain=true, QoS 0 or 1)
+    // 4. Publish raw ADC discovery config (retain=true, QoS 0 or 1)
+    // 5. Return Result<(), Error> for error handling
+    // 6. Set Last Will Testament (LWT) to publish "offline" on disconnect
 }
 
 /// Moisture sensor task: reads ADC periodically and sends readings to MQTT publisher
@@ -170,16 +372,26 @@ async fn mqtt_connection_task() {
     info!("mqtt: keep-alive - {}s", MQTT_KEEP_ALIVE_SECS);
     info!("mqtt: session expiry - {}s", MQTT_SESSION_EXPIRY_SECS);
 
+    // Placeholder: in the actual implementation, this would:
+    // 1. Create TCP socket using esp_radio's smoltcp stack
+    // 2. Implement embedded-io adapter for smoltcp socket
+    // 3. Use rust-mqtt client with the adapted socket
+    // 4. Set Last Will Testament (LWT) to publish "offline" on disconnect
+    // 5. Connect to broker
+
+    // Publish Home Assistant discovery messages
+    // This should happen after successful MQTT connection
+    // For now, we demonstrate the discovery structure even though MQTT isn't connected
+    publish_discovery(DEVICE_ID, SENSOR_ID).await;
+
     // Signal that MQTT infrastructure is ready (even though actual connection not yet implemented)
     MQTT_CONNECTED.signal(true);
     info!("mqtt: configuration complete, ready for TCP/MQTT implementation");
 
     // Placeholder: in the actual implementation, this would:
-    // 1. Create TCP socket using esp_radio's smoltcp stack
-    // 2. Implement embedded-io adapter for smoltcp socket
-    // 3. Use rust-mqtt client with the adapted socket
-    // 4. Handle reconnection with exponential backoff (2s → 30s max)
-    // 5. Monitor connection health with PINGREQ
+    // 1. Handle reconnection with exponential backoff (2s → 30s max)
+    // 2. Monitor connection health with PINGREQ
+    // 3. Re-publish discovery messages on reconnection (HA might have restarted)
 
     loop {
         Timer::after(Duration::from_secs(60)).await;
