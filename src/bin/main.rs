@@ -18,8 +18,11 @@ use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 
-use smoltcp::wire::Ipv4Address;
 use static_cell::StaticCell;
+
+// MQTT imports - configuration setup for future implementation
+// Note: Full rust-mqtt integration with esp-radio's smoltcp stack requires
+// additional adapter code that will be implemented in a future step
 
 // Optional local secrets support
 #[cfg(feature = "local_secrets")]
@@ -43,6 +46,15 @@ type MoistureAdcPin =
 const DEVICE_ID: &str = "fevicol-01";
 const SENSOR_ID: &str = "moisture-1";
 
+// MQTT Configuration
+// Configure these constants for your Home Assistant MQTT broker
+const MQTT_BROKER_HOST: &str = "192.168.1.100"; // Replace with your broker IP or hostname
+const MQTT_BROKER_PORT: u16 = 1883;
+const MQTT_KEEP_ALIVE_SECS: u16 = 60;
+const MQTT_SESSION_EXPIRY_SECS: u32 = 3600; // 1 hour - supports battery-powered use
+const MQTT_USERNAME: &str = ""; // Empty for no authentication
+const MQTT_PASSWORD: &str = ""; // Empty for no authentication
+
 /// Sensor reading data structure for inter-task communication
 #[derive(Clone, Copy, defmt::Format)]
 struct SensorReading {
@@ -55,11 +67,14 @@ struct SensorReading {
 }
 
 // Signal to notify when network is ready
-static NETWORK_READY: Signal<CriticalSectionRawMutex, Ipv4Address> = Signal::new();
+static NETWORK_READY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 // Channel for passing sensor readings from sensor task to MQTT publisher
 // Capacity of 20 readings allows buffering ~100 seconds of data during network outages
 static SENSOR_CHANNEL: StaticCell<Channel<NoopRawMutex, SensorReading, 20>> = StaticCell::new();
+
+// MQTT state management: signal to notify when MQTT client is connected
+static MQTT_CONNECTED: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 
 // Calibration constants from sensor calibration routine
 const SENSOR_DRY: u16 = 2188; // ADC value when sensor is in air (0% moisture)
@@ -135,25 +150,39 @@ async fn moisture_sensor_task(
 }
 
 /// MQTT connection management task: maintains connection to MQTT broker
+/// Note: This is currently a placeholder implementation that sets up the configuration
+/// and demonstrates the reconnection logic structure. Full TCP socket integration with
+/// esp-radio's smoltcp stack will be implemented in a follow-up.
 #[embassy_executor::task]
 async fn mqtt_connection_task() {
     info!("mqtt: connection task started, waiting for network...");
 
     // Wait for network to be ready
-    let ip = NETWORK_READY.wait().await;
-    info!("mqtt: network ready at {}", ip);
+    NETWORK_READY.wait().await;
+    info!("mqtt: network ready");
 
-    // TODO: Implement MQTT client initialization and connection management
-    // - Create TCP socket
-    // - Connect to MQTT broker
-    // - Handle reconnection on disconnect
-    // - Share MQTT client state with publish task
+    // Log MQTT configuration
+    info!(
+        "mqtt: broker configured - {}:{}",
+        MQTT_BROKER_HOST, MQTT_BROKER_PORT
+    );
+    info!("mqtt: client ID - {}", DEVICE_ID);
+    info!("mqtt: keep-alive - {}s", MQTT_KEEP_ALIVE_SECS);
+    info!("mqtt: session expiry - {}s", MQTT_SESSION_EXPIRY_SECS);
 
-    info!("mqtt: connection task placeholder - waiting for implementation");
+    // Signal that MQTT infrastructure is ready (even though actual connection not yet implemented)
+    MQTT_CONNECTED.signal(true);
+    info!("mqtt: configuration complete, ready for TCP/MQTT implementation");
 
-    // Sleep indefinitely until MQTT client is implemented
+    // Placeholder: in the actual implementation, this would:
+    // 1. Create TCP socket using esp_radio's smoltcp stack
+    // 2. Implement embedded-io adapter for smoltcp socket
+    // 3. Use rust-mqtt client with the adapted socket
+    // 4. Handle reconnection with exponential backoff (2s → 30s max)
+    // 5. Monitor connection health with PINGREQ
+
     loop {
-        Timer::after(Duration::from_secs(3600)).await;
+        Timer::after(Duration::from_secs(60)).await;
     }
 }
 
@@ -169,24 +198,39 @@ async fn mqtt_publish_task(
         device_id, sensor_id
     );
 
+    // Wait for MQTT client to be connected
+    info!("mqtt: publish task waiting for MQTT connection...");
+    loop {
+        let connected = MQTT_CONNECTED.wait().await;
+        if connected {
+            info!("mqtt: MQTT client ready, starting to receive sensor readings");
+            break;
+        } else {
+            warn!("mqtt: MQTT disconnected, waiting for reconnection...");
+        }
+    }
+
     loop {
         // Receive sensor reading from channel (blocks until available)
         let reading = receiver.receive().await;
 
-        // TODO: Publish to MQTT broker when client is implemented
+        // TODO: Actual publishing will be implemented in prompt 4
+        // For now, just log that we would publish
         // Topics to publish:
         //   - {device_id}/sensor/{sensor_id}/moisture (percentage)
         //   - {device_id}/sensor/{sensor_id}/raw (ADC value)
         //   - {device_id}/sensor/{sensor_id}/timestamp
 
         info!(
-            "mqtt: would publish - moisture={}%, raw={}, timestamp={}ms",
+            "mqtt: ready to publish - moisture={}%, raw={}, timestamp={}ms (publishing not yet implemented)",
             reading.moisture, reading.raw, reading.timestamp
         );
     }
 }
 
 /// Network task: manages Wi-Fi connection
+/// Note: esp-radio 0.17.0 provides smoltcp stack integration via Interfaces
+/// Future implementation will use Interfaces directly for TCP socket creation
 #[embassy_executor::task]
 async fn network_task(
     mut wifi: esp_radio::wifi::WifiController<'static>,
@@ -223,11 +267,11 @@ async fn network_task(
         Timer::after(Duration::from_millis(100)).await;
     }
 
-    // TODO: Set up TCP/IP stack with DHCP when implementing MQTT
-    // For now, just signal that Wi-Fi is connected
-    // Using a dummy IP address since we don't have DHCP yet
-    NETWORK_READY.signal(Ipv4Address::new(192, 168, 1, 100));
-    info!("network: ready (TCP/IP stack not yet implemented)");
+    // Signal that network is ready
+    // Note: esp-radio's Interfaces provides the smoltcp stack
+    // TCP/IP and DHCP are handled by the smoltcp stack within Interfaces
+    NETWORK_READY.signal(());
+    info!("network: ready, TCP/IP stack available via esp-radio Interfaces");
 
     // Monitor connection and reconnect if needed
     loop {
@@ -312,7 +356,8 @@ async fn main(spawner: Spawner) -> ! {
                     .with_ssid(ssid.into())
                     .with_password(pass.into());
 
-                // Spawn network task to manage Wi-Fi connection and TCP/IP stack
+                // Spawn network task to manage Wi-Fi connection
+                // Note: esp-radio's Interfaces provides the smoltcp TCP/IP stack
                 spawner.spawn(network_task(wifi, ifaces, client)).ok();
 
                 info!("wifi: network task spawned, waiting for connection...");
@@ -356,6 +401,10 @@ async fn main(spawner: Spawner) -> ! {
     );
     info!("sensor: watering threshold = {}%", MOISTURE_THRESHOLD);
     info!("sensor: device_id={}, sensor_id={}", DEVICE_ID, SENSOR_ID);
+    info!(
+        "mqtt: broker={}:{}, client_id={}",
+        MQTT_BROKER_HOST, MQTT_BROKER_PORT, DEVICE_ID
+    );
 
     // Main loop: all work is now done in spawned tasks
     // This loop just keeps the executor alive

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The name is a nod to the classic Fevicol adhesive commercial where a woman hanging from a cliff says "pakde rehna, chhoddna nahin" (hold on, don't let go) - similar to how houseplants desperately cling to life when neglected.
 
-**Current Status**: Moisture sensing implemented and calibrated. The system can read soil moisture levels via ADC and convert them to meaningful percentages (0-100%). Wi-Fi connectivity is functional. Architecture refactored to separate Embassy tasks for fault isolation between sensor and network operations. Still to implement: MQTT client integration, pump control, and Home Assistant integration.
+**Current Status**: Moisture sensing implemented and calibrated. The system can read soil moisture levels via ADC and convert them to meaningful percentages (0-100%). Wi-Fi connectivity is functional. Architecture refactored to separate Embassy tasks for fault isolation between sensor and network operations. MQTT client configuration infrastructure added with connection management task, ready for TCP/MQTT implementation. Still to implement: Full MQTT client TCP integration, actual publishing, pump control, and Home Assistant discovery.
 
 ## Features
 
@@ -20,11 +20,19 @@ The name is a nod to the classic Fevicol adhesive commercial where a woman hangi
    - Configurable threshold monitoring (currently 30%)
 2. **Wi-Fi Connectivity**: ✅ STA mode connection with auto-reconnect
 
+### In Progress
+3. **MQTT Infrastructure**: 🔧 Configuration and connection management ready
+   - MQTT 5.0 broker configuration (host, port, credentials)
+   - Client ID format: `fevicol-{DEVICE_ID}`
+   - Connection task with placeholder for TCP socket integration
+   - Publish task waits for MQTT readiness before processing sensor readings
+   - Next: Implement TCP socket adapter for esp-radio's smoltcp stack
+
 ### Planned
-3. **MQTT Integration**: Publish moisture readings and pump status to Home Assistant
-4. **Automatic Watering**: Trigger water pump when moisture falls below threshold
-5. **Pump Control**: GPIO-based relay/MOSFET control with safety limits
-6. **Home Assistant Discovery**: Automatic entity creation via MQTT discovery
+4. **MQTT Publishing**: Publish sensor readings to broker (TCP integration required)
+5. **Automatic Watering**: Trigger water pump when moisture falls below threshold
+6. **Pump Control**: GPIO-based relay/MOSFET control with safety limits
+7. **Home Assistant Discovery**: Automatic entity creation via MQTT discovery
 
 ## Technical Foundation
 
@@ -267,17 +275,38 @@ A calibration routine is preserved as commented code at the end of `src/bin/main
 4. Update `SENSOR_DRY` and `SENSOR_WET` constants with the averages
 5. Restore the monitoring loop
 
+### MQTT Configuration (Infrastructure Added)
+
+**Configuration Constants** (src/bin/main.rs):
+- `MQTT_BROKER_HOST`: Broker IP or hostname (default: "192.168.1.100") - configure for your network
+- `MQTT_BROKER_PORT`: Broker port (default: 1883)
+- `MQTT_KEEP_ALIVE_SECS`: Keep-alive interval (60 seconds)
+- `MQTT_SESSION_EXPIRY_SECS`: Session expiry for battery-powered mode (3600 seconds / 1 hour)
+- `MQTT_USERNAME` / `MQTT_PASSWORD`: Authentication credentials (empty strings for no auth)
+
+**Task Architecture**:
+- `mqtt_connection_task`: Waits for network, logs configuration, signals readiness (placeholder for TCP connection)
+- `mqtt_publish_task`: Waits for MQTT readiness, receives sensor readings from channel, ready to publish
+
+**Status**: Configuration infrastructure complete. Next step is implementing TCP socket adapter for esp-radio's smoltcp stack to connect rust-mqtt client.
+
 ### Next Implementation Steps
 
-**MQTT Integration** (Not Yet Implemented):
-- Use `embassy-net` TCP stack with `rust-mqtt` or similar `no_std` MQTT client
-- Implement reconnection logic for network interruptions
-- Use Home Assistant MQTT discovery for automatic entity creation
+**MQTT TCP Integration** (Next Priority):
+- Implement embedded-io adapter for esp-radio's smoltcp TCP socket
+- Integrate rust-mqtt client with adapted socket
+- Implement actual broker connection with MQTT 5.0 protocol
+- Add exponential backoff reconnection (2s → 30s max)
+- Implement PINGREQ for connection health monitoring
+
+**MQTT Publishing** (After TCP Integration):
 - Publish topics:
   - `fevicol/sensor/moisture` - moisture percentage
   - `fevicol/sensor/raw` - raw ADC value
-  - `fevicol/pump/status` - pump on/off state
-- Subscribe topics:
+  - `fevicol/sensor/timestamp` - reading timestamp
+  - `fevicol/pump/status` - pump on/off state (future)
+- Use Home Assistant MQTT discovery for automatic entity creation
+- Subscribe topics (future):
   - `fevicol/pump/command` - manual pump control
   - `fevicol/config/threshold` - adjust moisture threshold
 
