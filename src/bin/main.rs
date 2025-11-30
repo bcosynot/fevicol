@@ -33,9 +33,9 @@ extern crate alloc;
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// Type aliases for sensor task parameters
-type Adc1 = Adc<'static, esp_hal::peripherals::ADC1<'static>, esp_hal::Blocking>;
-type Adc1Pin0 = AdcPin<
+// Type aliases for moisture sensor task parameters
+type MoistureAdc = Adc<'static, esp_hal::peripherals::ADC1<'static>, esp_hal::Blocking>;
+type MoistureAdcPin = AdcPin<
     esp_hal::peripherals::GPIO0<'static>,
     esp_hal::peripherals::ADC1<'static>,
 >;
@@ -89,8 +89,8 @@ fn raw_to_moisture_percent(raw: u16) -> u8 {
 /// Moisture sensor task: reads ADC periodically and sends readings to MQTT publisher
 #[embassy_executor::task]
 async fn moisture_sensor_task(
-    mut adc: Adc1,
-    mut pin: Adc1Pin0,
+    mut adc: MoistureAdc,
+    mut pin: MoistureAdcPin,
     sender: embassy_sync::channel::Sender<'static, NoopRawMutex, SensorReading, 20>,
 ) {
     info!("sensor: task started");
