@@ -157,7 +157,9 @@ Additional Development Notes
 
 - ADC and networking crates
   - ADC1 configured for resistive soil moisture sensor on GPIO0
-  - `embassy-net` + `smoltcp` present; TCP/IP stack integration pending for MQTT
+  - `smoltcp` for TCP/IP stack via esp-radio's integrated Wi-Fi device
+  - `rust-mqtt` v0.3 for MQTT 5.0 client (configuration infrastructure complete, TCP adapter pending)
+  - `embedded-nal-async` v0.8 for network abstraction layer
   - Wi‑Fi currently operational in STA mode via esp‑radio
 
 - Sensor calibration
@@ -181,15 +183,27 @@ Implementation Status (as of 2025‑11‑30)
 - ✅ Test framework: `cargo test --no-run` validates embedded-test harness
 - ✅ **Task Architecture**: Refactored to separate Embassy tasks for fault isolation
   - Sensor reading in dedicated `moisture_sensor_task` (independent of network status)
-  - MQTT connection management in `mqtt_connection_task` (placeholder)
-  - MQTT publishing in `mqtt_publish_task` (placeholder)
+  - MQTT connection management in `mqtt_connection_task` (configuration and structure ready, TCP integration pending)
+  - MQTT publishing in `mqtt_publish_task` (waits for MQTT readiness, receives sensor readings from channel)
   - Inter-task communication via `embassy-sync::channel` with 20-reading buffer
+- ✅ **MQTT Infrastructure Setup**: Configuration and task structure complete
+  - MQTT broker configuration constants: host (192.168.1.100), port (1883), keep-alive (60s), session expiry (3600s)
+  - Client ID format: `fevicol-{DEVICE_ID}`
+  - Connection readiness signaling via `Signal<CriticalSectionRawMutex, bool>`
+  - Publish task waits for connection before processing sensor readings
 
 **Known Issues**:
 - ⚠️  Release builds fail with esp-radio NVS linker errors; use debug builds (optimized with `opt-level = "s"`)
 
 **Pending**:
-- ⏳ MQTT client implementation (connection and publishing)
-- ⏳ TCP/IP stack integration (embassy-net + esp-radio Wi-Fi interface)
+- ⏳ **MQTT TCP Integration** (next priority)
+  - Implement embedded-io adapter for esp-radio's smoltcp TCP socket
+  - Integrate rust-mqtt client with adapted socket
+  - Actual broker connection with MQTT 5.0 protocol
+  - Exponential backoff reconnection (2s → 30s max)
+  - PINGREQ for connection health monitoring
+- ⏳ **MQTT Publishing** (after TCP integration)
+  - Publish sensor readings (moisture %, raw ADC, timestamp) to configured topics
+  - Implement Home Assistant MQTT discovery
 - ⏳ Pump control GPIO implementation
 - ⏳ Safety limits (max run time, minimum interval between waterings)
