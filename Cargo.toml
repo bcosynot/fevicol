@@ -74,6 +74,6 @@ codegen-units    = 1     # LLVM can perform better optimizations using a single 
 debug            = 2
 debug-assertions = false
 incremental      = false
-lto              = 'fat'
+lto              = false  # Disabled: LTO strips esp-radio NVS symbols before linker script runs
 opt-level        = 's'
 overflow-checks  = false
