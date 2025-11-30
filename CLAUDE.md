@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The name is a nod to the classic Fevicol adhesive commercial where a woman hanging from a cliff says "pakde rehna, chhoddna nahin" (hold on, don't let go) - similar to how houseplants desperately cling to life when neglected.
 
-**Current Status**: Moisture sensing implemented and calibrated. The system can read soil moisture levels via ADC and convert them to meaningful percentages (0-100%). Wi-Fi connectivity is functional. Still to implement: MQTT integration, pump control, and Home Assistant integration.
+**Current Status**: Moisture sensing implemented and calibrated. The system can read soil moisture levels via ADC and convert them to meaningful percentages (0-100%). Wi-Fi connectivity is functional. Architecture refactored to separate Embassy tasks for fault isolation between sensor and network operations. Still to implement: MQTT client integration, pump control, and Home Assistant integration.
 
 ## Features
 
@@ -134,15 +134,32 @@ The radio initialization handle is shared between Wi-Fi and BLE (required for CO
 
 ### Application Architecture
 
-The application uses Embassy's async executor to run concurrent tasks:
+The application uses Embassy's async executor to run concurrent tasks with clear separation of concerns:
 
-**Implemented**:
+**Implemented Tasks**:
 1. **Network Task** (`network_task`): Manages Wi-Fi connection in STA mode with automatic reconnection
-2. **Main Loop**: Reads moisture sensor every 5 seconds, applies calibration, monitors threshold
+2. **Sensor Task** (`moisture_sensor_task`): Reads ADC every 5 seconds, converts raw values to percentages, sends readings to channel, and monitors threshold
+3. **MQTT Connection Task** (`mqtt_connection_task`): Waits for network availability and will manage MQTT broker connection lifecycle (currently placeholder)
+4. **MQTT Publish Task** (`mqtt_publish_task`): Receives sensor readings from channel and will publish to broker (currently logs readings as placeholder)
 
 **To Be Implemented**:
-3. **MQTT Task**: Maintain connection to broker, publish sensor readings, listen for commands
-4. **Pump Control Task**: Trigger pump when moisture drops below threshold, enforce safety limits (max run time, minimum interval between waterings)
+5. **Pump Control Task**: Trigger pump when moisture drops below threshold, enforce safety limits (max run time, minimum interval between waterings)
+
+### Inter-Task Communication
+
+The architecture uses `embassy-sync::channel::Channel` for passing sensor data between tasks:
+
+- **Channel Type**: `Channel<NoopRawMutex, SensorReading, 20>`
+- **Capacity**: 20 readings (buffers ~100 seconds of data during network outages)
+- **Data Structure**: `SensorReading` contains:
+  - `moisture: u8` - moisture percentage (0-100%)
+  - `raw: u16` - raw ADC value (0-4095)
+  - `timestamp: u64` - milliseconds since boot (from `embassy_time::Instant`)
+- **Flow**: Sensor task → Channel → MQTT publish task
+- **Benefits**:
+  - Sensor readings continue uninterrupted during network issues
+  - Fault isolation between sensor hardware and network operations
+  - Buffering prevents data loss during temporary MQTT disconnections
 
 ### Linker Configuration
 The `build.rs` script configures custom linker scripts and implements helpful error messages:
@@ -203,17 +220,22 @@ This allows testing firmware in simulation before deploying to hardware.
 
 ### Moisture Sensing (Implemented)
 
-**Hardware Configuration** (src/bin/main.rs:209-213):
+**Architecture**:
+- Sensor reading runs in dedicated `moisture_sensor_task`, independent of network status
+- Readings are sent via `embassy-sync::channel` to MQTT publish task
+- Task-based design provides fault isolation and continuous operation
+
+**Hardware Configuration** (src/bin/main.rs):
 - ADC1 configured on GPIO0 (Xiao ESP32-C6 pin A0)
 - 6dB attenuation (measuring range 0-2450mV)
 - Resistive moisture sensor (shows higher voltage when wet, lower when dry)
 
-**Calibration** (src/bin/main.rs:37-42):
+**Calibration** (constants in src/bin/main.rs):
 - `SENSOR_DRY = 2188`: ADC reading in air (0% moisture)
 - `SENSOR_WET = 4095`: ADC reading fully submerged (100% moisture)
 - Run calibration routine (commented at end of main.rs) to recalibrate for different sensors
 
-**Conversion Function** (src/bin/main.rs:44-58):
+**Conversion Function** (src/bin/main.rs):
 ```rust
 fn raw_to_moisture_percent(raw: u16) -> u8
 ```
@@ -221,11 +243,13 @@ fn raw_to_moisture_percent(raw: u16) -> u8
 - Returns 0-100% moisture level
 - Handles out-of-range values (clamps to 0% or 100%)
 
-**Monitoring** (src/bin/main.rs:251-273):
+**Sensor Task Behavior** (`moisture_sensor_task`):
 - Reads sensor every 5 seconds
-- Displays both raw ADC value and percentage
-- Warns when moisture < threshold (30% default)
-- Ready for MQTT publishing integration
+- Converts raw ADC values to moisture percentage
+- Creates `SensorReading` struct with moisture, raw value, and timestamp
+- Sends readings to channel (non-blocking, drops if channel full)
+- Logs readings and warns when moisture < threshold (30% default)
+- Continues operation independently of network/MQTT status
 
 ### Calibration Procedure
 

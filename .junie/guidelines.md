@@ -130,11 +130,19 @@ Additional Development Notes
 - Main binary structure
   - `src/bin/main.rs` sets CPU clock to max, initializes HAL, configures both heap regions, starts the scheduler
   - ADC1 configured on GPIO0 (A0) for resistive moisture sensor with 6dB attenuation
-  - Wi‑Fi enabled in STA mode via `network_task` with auto‑reconnect
-  - Main loop reads moisture sensor every 5s, converts to percentage (0-100%), monitors threshold (30%)
+  - Application runs in separate Embassy tasks:
+    - `network_task`: Wi‑Fi STA mode with auto‑reconnect
+    - `moisture_sensor_task`: Reads ADC every 5s, converts to percentage (0-100%), monitors threshold (30%), sends readings to channel
+    - `mqtt_connection_task`: Manages MQTT broker connection (currently placeholder)
+    - `mqtt_publish_task`: Receives sensor readings from channel and publishes to broker (currently placeholder)
+  - Inter-task communication via `embassy-sync::channel::Channel<NoopRawMutex, SensorReading, 20>` with 20-reading buffer
+  - `SensorReading` struct carries moisture percentage, raw ADC value, and timestamp between tasks
 
 - Concurrency model
   - Use `embassy_executor::Spawner` to start tasks. Ensure all hardware shared across tasks uses appropriate synchronization (e.g., `critical-section`, `static_cell`).
+  - **Task Architecture**: Use separate Embassy tasks for independent concerns (sensors, network, MQTT) to achieve fault isolation
+  - **Inter-task Communication**: Use `embassy-sync::channel::Channel` for passing data between tasks (e.g., sensor readings from sensor task to MQTT publish task)
+  - **Design Principle**: Keep sensor reading independent from network operations for resilience - sensor continues operating even during network outages
 
 - ADC and networking crates
   - ADC1 configured for resistive soil moisture sensor on GPIO0
@@ -151,7 +159,7 @@ Additional Development Notes
   - Follow existing import ordering and module layout as shown in `main.rs`/`tests/hello_test.rs`.
   - Keep comments minimal and practical, mirroring the repository’s style. Prefer `defmt::info!` for high‑level progress and `debug!` for verbose internals.
 
-Implementation Status (as of 2025‑11‑29)
+Implementation Status (as of 2025‑11‑30)
 
 **Completed**:
 - ✅ Moisture sensing: ADC1 reading on GPIO0 with resistive sensor
@@ -160,12 +168,17 @@ Implementation Status (as of 2025‑11‑29)
 - ✅ Wi‑Fi connectivity: STA mode with automatic reconnection
 - ✅ Threshold monitoring: Configurable moisture threshold (30%) with warning logs
 - ✅ Test framework: `cargo test --no-run` validates embedded-test harness
+- ✅ **Task Architecture**: Refactored to separate Embassy tasks for fault isolation
+  - Sensor reading in dedicated `moisture_sensor_task` (independent of network status)
+  - MQTT connection management in `mqtt_connection_task` (placeholder)
+  - MQTT publishing in `mqtt_publish_task` (placeholder)
+  - Inter-task communication via `embassy-sync::channel` with 20-reading buffer
 
 **Known Issues**:
 - ⚠️  Release builds fail with esp-radio NVS linker errors; use debug builds (optimized with `opt-level = "s"`)
 
 **Pending**:
-- ⏳ MQTT integration with Home Assistant
+- ⏳ MQTT client implementation (connection and publishing)
 - ⏳ TCP/IP stack integration (embassy-net + esp-radio Wi-Fi interface)
 - ⏳ Pump control GPIO implementation
 - ⏳ Safety limits (max run time, minimum interval between waterings)
