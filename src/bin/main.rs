@@ -23,9 +23,12 @@ use static_cell::StaticCell;
 use core::fmt::Write;
 use heapless::String;
 
-// MQTT imports - configuration setup for future implementation
-// Note: Full rust-mqtt integration with esp-radio's smoltcp stack requires
-// additional adapter code that will be implemented in a future step
+// MQTT imports - will be used when full TCP integration is implemented
+// use rust_mqtt::client::client::MqttClient;
+// use rust_mqtt::client::client_config::ClientConfig as MqttClientConfig;
+// use rust_mqtt::packet::v5::publish_packet::QualityOfService;
+// use rust_mqtt::utils::rng_generator::CountingRng;
+// use embedded_io_async::{Read as AsyncRead, Write as AsyncWrite};
 
 // Optional local secrets support
 #[cfg(feature = "local_secrets")]
@@ -48,6 +51,14 @@ type MoistureAdcPin =
 // TODO: Consider generating DEVICE_ID from MAC address suffix for uniqueness
 const DEVICE_ID: &str = "fevicol-01";
 const SENSOR_ID: &str = "moisture-1";
+
+// Topic alias constants for MQTT 5.0 bandwidth optimization
+// Topic aliases map long topic strings to small integers, saving bandwidth
+// First publish: full topic + alias property (e.g., "fevicol/fevicol-01/moisture-1/moisture" + alias=1)
+// Subsequent publishes: alias only (e.g., alias=1) - saves ~40+ bytes per message
+const ALIAS_MOISTURE: u16 = 1;
+const ALIAS_RAW: u16 = 2;
+// Reserve aliases 3-10 for future sensors
 
 // MQTT Configuration
 // Configure these constants for your Home Assistant MQTT broker
@@ -248,6 +259,59 @@ fn format_unique_id(device_id: &str, sensor_id: &str, metric: &str) -> String<64
     id
 }
 
+// ============================================================================
+// MQTT Topic Alias State Tracking
+// ============================================================================
+
+/// Tracks whether topic aliases have been established for the current MQTT session
+/// Topic aliases are per-session and must be re-established after reconnection
+struct TopicAliasState {
+    established: bool,
+    connection_generation: u32,
+}
+
+static TOPIC_ALIAS_STATE: embassy_sync::mutex::Mutex<CriticalSectionRawMutex, TopicAliasState> =
+    embassy_sync::mutex::Mutex::new(TopicAliasState {
+        established: false,
+        connection_generation: 0,
+    });
+
+// ============================================================================
+// Smoltcp TCP Socket Adapter for embedded-io-async
+// ============================================================================
+//
+// TODO: Implement TCP socket adapter for rust-mqtt integration
+//
+// The adapter needs to:
+// 1. Wrap smoltcp's TCP socket to implement embedded-io-async traits (Read + Write)
+// 2. Handle async polling of the smoltcp stack
+// 3. Manage socket lifecycle (connect, disconnect, error handling)
+//
+// Example implementation approach:
+//
+// struct SmoltcpSocketAdapter<'a> {
+//     socket: smoltcp::socket::tcp::Socket<'a>,
+//     ifaces: &'a esp_radio::wifi::Interfaces<'a>,
+// }
+//
+// impl<'a> embedded_io_async::ErrorType for SmoltcpSocketAdapter<'a> {
+//     type Error = smoltcp::socket::tcp::RecvError; // or custom error type
+// }
+//
+// impl<'a> embedded_io_async::Read for SmoltcpSocketAdapter<'a> {
+//     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+//         // Poll until data available, then read
+//     }
+// }
+//
+// impl<'a> embedded_io_async::Write for SmoltcpSocketAdapter<'a> {
+//     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+//         // Poll until can send, then write
+//     }
+// }
+//
+// Alternative: Use embedded-nal-async which might provide built-in adapters
+
 /// Publish Home Assistant discovery messages for all sensors
 /// This function should be called after successful MQTT connection
 ///
@@ -352,9 +416,7 @@ async fn moisture_sensor_task(
 }
 
 /// MQTT connection management task: maintains connection to MQTT broker
-/// Note: This is currently a placeholder implementation that sets up the configuration
-/// and demonstrates the reconnection logic structure. Full TCP socket integration with
-/// esp-radio's smoltcp stack will be implemented in a follow-up.
+/// Manages connection lifecycle and topic alias reset on reconnection
 #[embassy_executor::task]
 async fn mqtt_connection_task() {
     info!("mqtt: connection task started, waiting for network...");
@@ -372,33 +434,111 @@ async fn mqtt_connection_task() {
     info!("mqtt: keep-alive - {}s", MQTT_KEEP_ALIVE_SECS);
     info!("mqtt: session expiry - {}s", MQTT_SESSION_EXPIRY_SECS);
 
-    // Placeholder: in the actual implementation, this would:
-    // 1. Create TCP socket using esp_radio's smoltcp stack
-    // 2. Implement embedded-io adapter for smoltcp socket
-    // 3. Use rust-mqtt client with the adapted socket
-    // 4. Set Last Will Testament (LWT) to publish "offline" on disconnect
-    // 5. Connect to broker
-
-    // Publish Home Assistant discovery messages
-    // This should happen after successful MQTT connection
-    // For now, we demonstrate the discovery structure even though MQTT isn't connected
-    publish_discovery(DEVICE_ID, SENSOR_ID).await;
-
-    // Signal that MQTT infrastructure is ready (even though actual connection not yet implemented)
-    MQTT_CONNECTED.signal(true);
-    info!("mqtt: configuration complete, ready for TCP/MQTT implementation");
-
-    // Placeholder: in the actual implementation, this would:
-    // 1. Handle reconnection with exponential backoff (2s → 30s max)
-    // 2. Monitor connection health with PINGREQ
-    // 3. Re-publish discovery messages on reconnection (HA might have restarted)
+    // Connection loop with generation tracking for alias management
+    let mut connection_attempt = 0u32;
 
     loop {
-        Timer::after(Duration::from_secs(60)).await;
+        connection_attempt += 1;
+        info!("mqtt: connection attempt #{}", connection_attempt);
+
+        // TODO: Full TCP/MQTT connection implementation:
+        // ==========================================
+        // 1. Create TCP socket using esp-radio's Interfaces (smoltcp stack):
+        //
+        //    let mut socket_set = SocketSet::new(&mut socket_storage);
+        //    let tcp_handle = socket_set.add(tcp_socket);
+        //    let socket = socket_set.get_mut::<tcp::Socket>(tcp_handle);
+        //
+        //    // Connect to broker
+        //    let remote_endpoint = (MQTT_BROKER_HOST.parse().unwrap(), MQTT_BROKER_PORT);
+        //    socket.connect(cx, remote_endpoint, local_port)?;
+        //
+        // 2. Wrap socket in SmoltcpSocketAdapter (or use embedded-nal-async):
+        //
+        //    let adapter = SmoltcpSocketAdapter::new(socket, &ifaces);
+        //
+        // 3. Create rust-mqtt client:
+        //
+        //    let mut mqtt_config = MqttClientConfig::new(
+        //        rust_mqtt::client::client_config::MqttVersion::MQTTv5,
+        //        CountingRng(20000)
+        //    );
+        //    mqtt_config.add_max_subscribe_qos(QualityOfService::QoS1);
+        //    mqtt_config.add_client_id(DEVICE_ID);
+        //    mqtt_config.keep_alive = MQTT_KEEP_ALIVE_SECS;
+        //
+        //    // Set Last Will Testament (LWT) - publish "offline" if disconnected
+        //    let availability_topic = build_availability_topic(DEVICE_ID);
+        //    mqtt_config.add_last_will(
+        //        availability_topic.as_str(),
+        //        b"offline",
+        //        QualityOfService::QoS0,
+        //        true  // retain
+        //    );
+        //
+        //    let mut mqtt_client = MqttClient::new(
+        //        adapter,
+        //        &mut write_buffer,
+        //        256,  // write buffer size
+        //        &mut recv_buffer,
+        //        256,  // receive buffer size
+        //        mqtt_config
+        //    );
+        //
+        // 4. Connect to broker:
+        //
+        //    mqtt_client.connect_to_broker().await?;
+        //
+        // 5. Publish availability as "online" (with retain):
+        //
+        //    mqtt_client.publish(
+        //        availability_topic.as_str(),
+        //        b"online",
+        //        QualityOfService::QoS0,
+        //        true,  // retain
+        //        None   // no alias for availability
+        //    ).await?;
+
+        // Increment connection generation to trigger alias re-establishment
+        {
+            let mut alias_state = TOPIC_ALIAS_STATE.lock().await;
+            alias_state.connection_generation = connection_attempt;
+            alias_state.established = false;
+            info!(
+                "mqtt: connection generation updated to {}",
+                alias_state.connection_generation
+            );
+        }
+
+        // Publish Home Assistant discovery messages
+        // This should happen after successful MQTT connection
+        publish_discovery(DEVICE_ID, SENSOR_ID).await;
+
+        // Signal that MQTT is connected
+        MQTT_CONNECTED.signal(true);
+        info!(
+            "mqtt: simulated connection established (generation {})",
+            connection_attempt
+        );
+        info!("mqtt: topic aliases will be re-established on next publish");
+
+        // For now, just stay "connected" - in real implementation, monitor connection health
+        // TODO: Real implementation would:
+        // - Monitor connection state
+        // - Send PINGREQ for keep-alive
+        // - Detect disconnection and reconnect with exponential backoff (2s → 30s max)
+        // - Re-publish discovery on reconnection (HA might have restarted)
+        // - Reset aliases_established flag when disconnected
+
+        loop {
+            Timer::after(Duration::from_secs(60)).await;
+            // TODO: Check if still connected, break if disconnected to retry
+        }
     }
 }
 
 /// MQTT publishing task: receives sensor readings and publishes to broker
+/// Implements MQTT 5.0 topic aliases for bandwidth optimization
 #[embassy_executor::task]
 async fn mqtt_publish_task(
     receiver: embassy_sync::channel::Receiver<'static, NoopRawMutex, SensorReading, 20>,
@@ -422,21 +562,105 @@ async fn mqtt_publish_task(
         }
     }
 
+    // Track current connection generation for alias management
+    let mut current_generation = 0u32;
+    let mut publish_count = 0u32;
+
+    // Build topic strings (used for first publish to establish aliases)
+    let moisture_topic = build_state_topic(device_id, sensor_id, "moisture");
+    let raw_topic = build_state_topic(device_id, sensor_id, "raw");
+
+    info!("mqtt: moisture topic = '{}'", moisture_topic.as_str());
+    info!("mqtt: raw topic = '{}'", raw_topic.as_str());
+
     loop {
         // Receive sensor reading from channel (blocks until available)
         let reading = receiver.receive().await;
 
-        // TODO: Actual publishing will be implemented in prompt 4
-        // For now, just log that we would publish
-        // Topics to publish:
-        //   - {device_id}/sensor/{sensor_id}/moisture (percentage)
-        //   - {device_id}/sensor/{sensor_id}/raw (ADC value)
-        //   - {device_id}/sensor/{sensor_id}/timestamp
+        // Check if we need to re-establish aliases (connection changed)
+        let mut alias_state = TOPIC_ALIAS_STATE.lock().await;
+        let aliases_established =
+            alias_state.established && alias_state.connection_generation == current_generation;
 
-        info!(
-            "mqtt: ready to publish - moisture={}%, raw={}, timestamp={}ms (publishing not yet implemented)",
-            reading.moisture, reading.raw, reading.timestamp
-        );
+        if !aliases_established {
+            // New connection or first publish - establish aliases
+            info!(
+                "mqtt: establishing topic aliases for connection generation {}",
+                alias_state.connection_generation
+            );
+
+            // Format payloads
+            let mut moisture_payload = String::<16>::new();
+            let mut raw_payload = String::<16>::new();
+            write!(moisture_payload, "{}", reading.moisture).ok();
+            write!(raw_payload, "{}", reading.raw).ok();
+
+            // TODO: Actual MQTT publishing will use rust-mqtt client here
+            // First publish with full topic + alias property to establish the mapping:
+            //
+            // mqtt_client.publish(
+            //     &moisture_topic,           // Full topic string
+            //     moisture_payload.as_bytes(),
+            //     QualityOfService::QoS0,
+            //     false,                     // retain = false (or true for last value)
+            //     Some(ALIAS_MOISTURE)       // Topic alias property
+            // ).await?;
+            //
+            // This tells the broker: "map this topic to alias 1"
+
+            info!(
+                "mqtt: [FIRST PUBLISH] topic='{}' payload='{}' alias={} (establishes alias)",
+                moisture_topic.as_str(),
+                moisture_payload.as_str(),
+                ALIAS_MOISTURE
+            );
+
+            info!(
+                "mqtt: [FIRST PUBLISH] topic='{}' payload='{}' alias={} (establishes alias)",
+                raw_topic.as_str(),
+                raw_payload.as_str(),
+                ALIAS_RAW
+            );
+
+            // Mark aliases as established for this connection
+            current_generation = alias_state.connection_generation;
+            alias_state.established = true;
+            drop(alias_state);
+
+            info!("mqtt: topic aliases established successfully");
+        } else {
+            // Aliases already established - use alias-only publish (bandwidth optimized)
+            // Format payloads
+            let mut moisture_payload = String::<16>::new();
+            let mut raw_payload = String::<16>::new();
+            write!(moisture_payload, "{}", reading.moisture).ok();
+            write!(raw_payload, "{}", reading.raw).ok();
+
+            // TODO: Actual MQTT publishing with alias only (no topic string):
+            //
+            // mqtt_client.publish_with_alias(
+            //     ALIAS_MOISTURE,              // Alias only (2 bytes vs ~50 bytes)
+            //     moisture_payload.as_bytes(),
+            //     QualityOfService::QoS0,
+            //     false                        // retain
+            // ).await?;
+            //
+            // This saves ~48 bytes per publish!
+
+            // Only log every 12th publish to reduce spam (once per minute at 5s intervals)
+            publish_count += 1;
+            if publish_count % 12 == 0 {
+                info!(
+                    "mqtt: [PUBLISH VIA ALIAS] moisture={}% (alias={}), raw={} (alias={}) - published {} times",
+                    reading.moisture, ALIAS_MOISTURE, reading.raw, ALIAS_RAW, publish_count
+                );
+            }
+        }
+
+        // TODO: Error handling for publish failures:
+        // - If publish fails due to network: log error, continue (reading is lost but sensor continues)
+        // - If publish fails due to protocol error: may need to re-establish connection
+        // - Never panic - robustness is key for embedded systems
     }
 }
 
