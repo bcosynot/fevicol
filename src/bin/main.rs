@@ -35,10 +35,8 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 // Type aliases for moisture sensor task parameters
 type MoistureAdc = Adc<'static, esp_hal::peripherals::ADC1<'static>, esp_hal::Blocking>;
-type MoistureAdcPin = AdcPin<
-    esp_hal::peripherals::GPIO0<'static>,
-    esp_hal::peripherals::ADC1<'static>,
->;
+type MoistureAdcPin =
+    AdcPin<esp_hal::peripherals::GPIO0<'static>, esp_hal::peripherals::ADC1<'static>>;
 
 // Device and sensor identifiers for MQTT topic namespacing
 // TODO: Consider generating DEVICE_ID from MAC address suffix for uniqueness
@@ -336,7 +334,9 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(mqtt_connection_task()).ok();
 
     // Spawn MQTT publishing task
-    spawner.spawn(mqtt_publish_task(sensor_receiver, DEVICE_ID, SENSOR_ID)).ok();
+    spawner
+        .spawn(mqtt_publish_task(sensor_receiver, DEVICE_ID, SENSOR_ID))
+        .ok();
 
     // Set up ADC1 on pin A0 (XIAO ESP32-C6: A0 = GPIO0). Power the sensor from 3V3, not 5V.
     // esp-hal v1.0 API uses AdcConfig + enable_pin on the GPIO peripheral directly.
@@ -345,7 +345,9 @@ async fn main(spawner: Spawner) -> ! {
     let adc1 = Adc::new(peripherals.ADC1, adc1_cfg);
 
     // Spawn moisture sensor task
-    spawner.spawn(moisture_sensor_task(adc1, a0, sensor_sender)).ok();
+    spawner
+        .spawn(moisture_sensor_task(adc1, a0, sensor_sender))
+        .ok();
 
     info!("application: all tasks spawned");
     info!(
