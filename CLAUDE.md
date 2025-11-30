@@ -28,17 +28,39 @@ The name is a nod to the classic Fevicol adhesive commercial where a woman hangi
    - Ready to publish when MQTT client is connected
 
 ### In Progress
-4. **MQTT Infrastructure**: 🔧 Configuration and connection management ready
+4. **MQTT Infrastructure**: 🔧 Configuration, client abstraction, and discovery publishing ready
    - MQTT 5.0 broker configuration (host, port, credentials)
    - Client ID format: `fevicol-{DEVICE_ID}`
-   - Connection task with placeholder for TCP socket integration
+   - New crate‑agnostic client interface: `MqQos` + `MqttPublish` trait
+   - `publish_discovery(&mut impl MqttPublish, device_id, sensor_id) -> Result` publishes retained availability + HA discovery with QoS 1
+   - Default build uses a `LoggerPublisher` (log‑only) until a concrete client feature is enabled
    - Publish task waits for MQTT readiness before processing sensor readings
-   - Next: Implement TCP socket adapter for esp-radio's smoltcp stack
+   - Next: Implement TCP socket adapter for esp-radio's smoltcp stack and wire a concrete client
 
 ### Planned
 5. **MQTT Publishing**: Publish sensor readings to broker (TCP integration required)
 6. **Automatic Watering**: Trigger water pump when moisture falls below threshold
 7. **Pump Control**: GPIO-based relay/MOSFET control with safety limits
+
+## MQTT Client Abstraction and Feature Flags (2025‑11‑30)
+
+- Abstraction
+  - `src/bin/main.rs` defines a minimal MQTT publish interface to decouple the app from a specific client crate:
+    - `enum MqQos { AtMostOnce, AtLeastOnce }`
+    - `trait MqttPublish { async fn publish(&mut self, topic: &str, payload: &[u8], qos: MqQos, retain: bool) -> Result<(), Self::Err>; }`
+  - `publish_discovery` now accepts `&mut impl MqttPublish` and returns `Result`, publishing retained availability and Home Assistant discovery payloads with pacing.
+
+- Default mode (log‑only)
+  - Without a concrete client feature, `LoggerPublisher` logs topics/payload lengths so discovery flow can be validated on RTT.
+
+- Feature flags (Cargo.toml)
+  - `mqtt_impl_rust_mqtt` — integrate `rust-mqtt` 0.3 over a smoltcp TCP adapter (preferred short‑term path)
+  - `mqtt_impl_embedded_mqttc` — alternative client option
+  - `mqtt_impl_mountain_mqtt` — alternative client option
+  - With none enabled (default), the build remains in log‑only mode and signals `MQTT_CONNECTED` after discovery logging.
+
+- LWT
+  - The connection task will configure Last Will Testament to publish `offline` retained to `fevicol/{device_id}/status` on unexpected disconnect when a concrete client is active. After connect, it publishes `online` retained and discovery configs.
 
 ## Technical Foundation
 
@@ -78,7 +100,7 @@ The project uses **probe-rs** (not espflash) as the cargo runner, configured in 
 
 ### Build and Flash to Device
 ```bash
-cargo run  # Use debug mode (release has linker issues with esp-radio NVS symbols)
+cargo run --release
 ```
 
 This command builds the project, flashes it to the ESP32-C6, and starts monitoring RTT output. The runner is configured with:
@@ -91,7 +113,7 @@ This command builds the project, flashes it to the ESP32-C6, and starts monitori
 ### Build Only
 ```bash
 cargo build  # Debug mode (recommended)
-cargo build --release  # Currently has linker issues
+cargo build --release 
 ```
 
 ### Format Check

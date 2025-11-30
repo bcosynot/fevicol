@@ -103,6 +103,31 @@ Testing
     - If you see errors about `embedded_test_linker_file_not_added_to_rustflags`, ensure you are building this project (which wires it in via `build.rs`).
     - Missing defmt symbols or stack start usually indicate linker script ordering; this repo’s `build.rs` already forces correct order.
 
+- MQTT TCP Integration (new in 2025‑11‑30)
+
+- Abstraction and publish semantics
+  - Introduced crate‑agnostic MQTT publish interface in `src/bin/main.rs`:
+    - `enum MqQos { AtMostOnce, AtLeastOnce }`
+    - `trait MqttPublish { async fn publish(&mut self, topic: &str, payload: &[u8], qos: MqQos, retain: bool) -> Result<(), Self::Err>; }`
+  - `publish_discovery(client, device_id, sensor_id) -> Result<(), _>` now publishes retained availability and Home Assistant discovery configs using the trait, with QoS 1 by default and ~100 ms pacing between publishes.
+
+- Default behavior (log‑only)
+  - Until a concrete client is enabled, the firmware uses `LoggerPublisher` (logs the topic/length/retain). This keeps discovery and topic generation exercised without a broker.
+  - The MQTT publish task still waits on `MQTT_CONNECTED` and logs readings; actual telemetry publish will be wired to the real client in a follow‑up.
+
+- Feature flags (Cargo.toml)
+  - Added feature switches to select a concrete MQTT client when ready:
+    - `mqtt_impl_rust_mqtt` — use `rust-mqtt` 0.3 over a smoltcp TCP adapter (preferred short‑term path)
+    - `mqtt_impl_embedded_mqttc` — alternative client option
+    - `mqtt_impl_mountain_mqtt` — alternative client option
+  - With no `mqtt_impl_*` feature enabled (default), the build stays in log‑only mode.
+
+- LWT and retained availability
+  - The connection task will configure an LWT to publish `offline` to `fevicol/{device_id}/status` retained on unexpected disconnect when a concrete client feature is enabled. After successful connect, discovery publishes `online` retained.
+
+- Adapter
+  - A thin `embedded-io-async` TCP adapter over `esp-radio`/`smoltcp` will provide the stream for the MQTT client. Enable `mqtt_impl_rust_mqtt` to compile the real path once the adapter is finalized.
+
 - Adding a new async test (template)
   - Minimal skeleton (mirrors `tests/hello_test.rs`):
 
@@ -191,9 +216,6 @@ Implementation Status (as of 2025‑11‑30)
   - Client ID format: `fevicol-{DEVICE_ID}`
   - Connection readiness signaling via `Signal<CriticalSectionRawMutex, bool>`
   - Publish task waits for connection before processing sensor readings
-
-**Known Issues**:
-- ⚠️  Release builds fail with esp-radio NVS linker errors; use debug builds (optimized with `opt-level = "s"`)
 
 **Pending**:
 - ⏳ **MQTT TCP Integration** (next priority)

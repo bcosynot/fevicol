@@ -27,6 +27,9 @@ use heapless::String;
 // Note: Full rust-mqtt integration with esp-radio's smoltcp stack requires
 // additional adapter code that will be implemented in a future step
 
+#[cfg(feature = "mqtt_impl_rust_mqtt")]
+use embassy_sync::mutex::Mutex;
+
 // Optional local secrets support
 #[cfg(feature = "local_secrets")]
 mod secrets;
@@ -34,6 +37,104 @@ mod secrets;
 use secrets::{WIFI_PASS as LOCAL_PASS, WIFI_SSID as LOCAL_SSID};
 
 extern crate alloc;
+
+// ----------------------------------------------------------------------------
+// MQTT publishing abstraction (crate-agnostic) per plan in .junie/plans/mqtt-tcp/plan.md
+// ----------------------------------------------------------------------------
+
+/// MQTT QoS mapping for a minimal, crate-agnostic publish interface.
+pub enum MqQos {
+    /// QoS 0 — At most once
+    AtMostOnce,
+    /// QoS 1 — At least once
+    AtLeastOnce,
+}
+
+/// Minimal MQTT publish trait to decouple app code from a specific client crate.
+pub trait MqttPublish {
+    type Err;
+    /// Publish a binary payload to `topic` with the given QoS and retain flag.
+    async fn publish(
+        &mut self,
+        topic: &str,
+        payload: &[u8],
+        qos: MqQos,
+        retain: bool,
+    ) -> Result<(), Self::Err>;
+}
+
+/// Log-only publisher used while TCP/MQTT client integration is feature-gated.
+/// This allows exercising the discovery and topic-building code without a broker.
+pub struct LoggerPublisher;
+
+impl MqttPublish for LoggerPublisher {
+    type Err = core::convert::Infallible;
+
+    async fn publish(
+        &mut self,
+        topic: &str,
+        payload: &[u8],
+        qos: MqQos,
+        retain: bool,
+    ) -> Result<(), Self::Err> {
+        let qos_str = match qos {
+            MqQos::AtMostOnce => "QoS0",
+            MqQos::AtLeastOnce => "QoS1",
+        };
+        info!(
+            "mqtt(LOG): topic='{}' len={} {} retain={}",
+            topic,
+            payload.len(),
+            qos_str,
+            retain
+        );
+        Ok(())
+    }
+}
+
+// ----------------------------------------------------------------------------
+// MQTT concrete publisher wiring (feature-gated)
+// ----------------------------------------------------------------------------
+
+#[cfg(feature = "mqtt_impl_rust_mqtt")]
+mod mqtt_impl {
+    use super::*;
+    use embassy_sync::mutex::Mutex;
+
+    // Placeholder TCP stream adapter over esp-radio/smoltcp. The real
+    // implementation will provide non-blocking read/write using smoltcp sockets.
+    pub struct SmolTcpStream;
+    impl SmolTcpStream {
+        pub async fn connect(_host: &str, _port: u16) -> Result<Self, ()> {
+            // TODO: implement real TCP connect using esp_radio::wifi::Interfaces
+            Err(())
+        }
+        pub async fn close(&mut self) {}
+    }
+
+    // Publisher storage accessible to publish task
+    pub type PubMutex = Mutex<NoopRawMutex, Option<LoggerPublisher>>;
+    static PUB_CELL: StaticCell<PubMutex> = StaticCell::new();
+
+    pub fn publisher_mutex() -> &'static PubMutex {
+        PUB_CELL.init(Mutex::new(None))
+    }
+
+    pub async fn with_publisher<F, R>(f: F) -> Option<R>
+    where
+        F: for<'a> FnOnce(
+            &'a mut LoggerPublisher,
+        ) -> core::pin::Pin<Box<dyn core::future::Future<Output = R> + 'a>>,
+    {
+        let m = publisher_mutex();
+        let mut g = m.lock().await;
+        if let Some(p) = g.as_mut() {
+            Some(f(p).await)
+        } else {
+            None
+        }
+    }
+}
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -92,6 +193,17 @@ static SENSOR_CHANNEL: StaticCell<Channel<NoopRawMutex, SensorReading, 20>> = St
 
 // MQTT state management: signal to notify when MQTT client is connected
 static MQTT_CONNECTED: Signal<CriticalSectionRawMutex, bool> = Signal::new();
+
+// Expose esp-radio Interfaces to networking adapters when Wi‑Fi is up.
+// Filled by network_task once Wi‑Fi and the smoltcp stack are ready.
+#[cfg(feature = "mqtt_impl_rust_mqtt")]
+static IFACES_CELL: StaticCell<Mutex<NoopRawMutex, Option<esp_radio::wifi::Interfaces<'static>>>> =
+    StaticCell::new();
+
+#[cfg(feature = "mqtt_impl_rust_mqtt")]
+fn ifaces_mutex() -> &'static Mutex<NoopRawMutex, Option<esp_radio::wifi::Interfaces<'static>>> {
+    IFACES_CELL.init(Mutex::new(None))
+}
 
 // Calibration constants from sensor calibration routine
 const SENSOR_DRY: u16 = 2188; // ADC value when sensor is in air (0% moisture)
@@ -248,57 +360,57 @@ fn format_unique_id(device_id: &str, sensor_id: &str, metric: &str) -> String<64
     id
 }
 
-/// Publish Home Assistant discovery messages for all sensors
-/// This function should be called after successful MQTT connection
-///
-/// Note: This is currently a placeholder implementation that demonstrates the structure.
-/// Full MQTT publishing with rust-mqtt will be implemented in a future step.
-/// Discovery messages must be published with retain=true and QoS 0 or 1.
-async fn publish_discovery(device_id: &str, sensor_id: &str) {
+/// Publish Home Assistant discovery messages for all sensors over an MQTT client.
+/// The client must already be connected. Messages are published retained with QoS 1.
+async fn publish_discovery<C: MqttPublish + ?Sized>(
+    client: &mut C,
+    device_id: &str,
+    sensor_id: &str,
+) -> Result<(), C::Err> {
     info!("mqtt: publishing Home Assistant discovery messages...");
 
-    // Publish availability topic first (online status)
+    // 1) Availability: publish online retained
     let availability_topic = build_availability_topic(device_id);
-    info!(
-        "mqtt: [PLACEHOLDER] would publish to '{}' payload='online' (retain=true)",
-        availability_topic.as_str()
-    );
+    client
+        .publish(
+            availability_topic.as_str(),
+            b"online",
+            MqQos::AtLeastOnce,
+            true,
+        )
+        .await?;
 
     // Small delay between publishes to avoid overwhelming the broker
     Timer::after(Duration::from_millis(100)).await;
 
-    // Publish moisture sensor discovery
+    // 2) Moisture discovery retained
     let moisture_topic = build_discovery_topic("sensor", device_id, "moisture");
     let moisture_payload = create_moisture_discovery_payload(device_id, sensor_id);
-    info!(
-        "mqtt: [PLACEHOLDER] would publish discovery to '{}'",
-        moisture_topic.as_str()
-    );
-    info!("mqtt:   payload length: {} bytes", moisture_payload.len());
-    info!("mqtt:   payload: {}", moisture_payload.as_str());
+    client
+        .publish(
+            moisture_topic.as_str(),
+            moisture_payload.as_bytes(),
+            MqQos::AtLeastOnce,
+            true,
+        )
+        .await?;
 
-    // Small delay between publishes
     Timer::after(Duration::from_millis(100)).await;
 
-    // Publish raw ADC sensor discovery
+    // 3) Raw ADC discovery retained
     let raw_topic = build_discovery_topic("sensor", device_id, "raw");
     let raw_payload = create_raw_discovery_payload(device_id, sensor_id);
-    info!(
-        "mqtt: [PLACEHOLDER] would publish discovery to '{}'",
-        raw_topic.as_str()
-    );
-    info!("mqtt:   payload length: {} bytes", raw_payload.len());
-    info!("mqtt:   payload: {}", raw_payload.as_str());
+    client
+        .publish(
+            raw_topic.as_str(),
+            raw_payload.as_bytes(),
+            MqQos::AtLeastOnce,
+            true,
+        )
+        .await?;
 
-    info!("mqtt: Home Assistant discovery complete");
-
-    // TODO: In actual implementation, this function will:
-    // 1. Take MQTT client reference as parameter
-    // 2. Publish availability topic with "online" (retain=true)
-    // 3. Publish moisture discovery config (retain=true, QoS 0 or 1)
-    // 4. Publish raw ADC discovery config (retain=true, QoS 0 or 1)
-    // 5. Return Result<(), Error> for error handling
-    // 6. Set Last Will Testament (LWT) to publish "offline" on disconnect
+    info!("mqtt: Home Assistant discovery published");
+    Ok(())
 }
 
 /// Moisture sensor task: reads ADC periodically and sends readings to MQTT publisher
@@ -372,21 +484,44 @@ async fn mqtt_connection_task() {
     info!("mqtt: keep-alive - {}s", MQTT_KEEP_ALIVE_SECS);
     info!("mqtt: session expiry - {}s", MQTT_SESSION_EXPIRY_SECS);
 
-    // Placeholder: in the actual implementation, this would:
-    // 1. Create TCP socket using esp_radio's smoltcp stack
-    // 2. Implement embedded-io adapter for smoltcp socket
-    // 3. Use rust-mqtt client with the adapted socket
-    // 4. Set Last Will Testament (LWT) to publish "offline" on disconnect
-    // 5. Connect to broker
+    // In default build (no client feature), use a log-only publisher to exercise the flow.
+    #[cfg(not(any(
+        feature = "mqtt_impl_rust_mqtt",
+        feature = "mqtt_impl_embedded_mqttc",
+        feature = "mqtt_impl_mountain_mqtt"
+    )))]
+    {
+        let mut publog = LoggerPublisher;
+        let _ = publish_discovery(&mut publog, DEVICE_ID, SENSOR_ID).await;
+        MQTT_CONNECTED.signal(true);
+        info!("mqtt: log-only mode active (enable an mqtt_impl_* feature for real client)");
+    }
 
-    // Publish Home Assistant discovery messages
-    // This should happen after successful MQTT connection
-    // For now, we demonstrate the discovery structure even though MQTT isn't connected
-    publish_discovery(DEVICE_ID, SENSOR_ID).await;
+    // rust-mqtt client path (feature-gated). Note: the TCP adapter over smoltcp
+    // will be provided as `SmolTcpStream` implementing embedded-io-async.
+    #[cfg(feature = "mqtt_impl_rust_mqtt")]
+    {
+        // Temporary: store LoggerPublisher as the concrete publisher so the
+        // rest of the pipeline exercises the same code paths. Once the TCP
+        // adapter and real client are ready, replace this with an actual
+        // client connection and publisher wrapper.
+        use crate::mqtt_impl::publisher_mutex;
+        let m = publisher_mutex();
+        {
+            let mut g = m.lock().await;
+            *g = Some(LoggerPublisher);
+        }
 
-    // Signal that MQTT infrastructure is ready (even though actual connection not yet implemented)
-    MQTT_CONNECTED.signal(true);
-    info!("mqtt: configuration complete, ready for TCP/MQTT implementation");
+        // Publish discovery using the shared publisher
+        {
+            let mut publog = LoggerPublisher;
+            let _ = publish_discovery(&mut publog, DEVICE_ID, SENSOR_ID).await;
+        }
+        MQTT_CONNECTED.signal(true);
+        info!(
+            "mqtt: rust-mqtt feature path active (temporary log-only publisher). TCP adapter + client pending."
+        );
+    }
 
     // Placeholder: in the actual implementation, this would:
     // 1. Handle reconnection with exponential backoff (2s → 30s max)
@@ -426,17 +561,62 @@ async fn mqtt_publish_task(
         // Receive sensor reading from channel (blocks until available)
         let reading = receiver.receive().await;
 
-        // TODO: Actual publishing will be implemented in prompt 4
-        // For now, just log that we would publish
-        // Topics to publish:
-        //   - {device_id}/sensor/{sensor_id}/moisture (percentage)
-        //   - {device_id}/sensor/{sensor_id}/raw (ADC value)
-        //   - {device_id}/sensor/{sensor_id}/timestamp
+        // Default/log-only path: just log values
+        #[cfg(not(feature = "mqtt_impl_rust_mqtt"))]
+        {
+            info!(
+                "mqtt: ready to publish - moisture={}%, raw={}, timestamp={}ms (log-only mode)",
+                reading.moisture, reading.raw, reading.timestamp
+            );
+        }
 
-        info!(
-            "mqtt: ready to publish - moisture={}%, raw={}, timestamp={}ms (publishing not yet implemented)",
-            reading.moisture, reading.raw, reading.timestamp
-        );
+        // Feature path: use shared publisher (currently LoggerPublisher till TCP client lands)
+        #[cfg(feature = "mqtt_impl_rust_mqtt")]
+        {
+            use crate::mqtt_impl::with_publisher;
+
+            let state_topic = build_state_topic(device_id, sensor_id, "moisture");
+            let raw_topic = build_state_topic(device_id, sensor_id, "raw");
+            let ts_topic = build_state_topic(device_id, sensor_id, "timestamp");
+
+            // Encode payloads as small ASCII
+            let mut moist_buf: heapless::String<8> = heapless::String::new();
+            let _ = write!(moist_buf, "{}", reading.moisture);
+            let mut raw_buf: heapless::String<8> = heapless::String::new();
+            let _ = write!(raw_buf, "{}", reading.raw);
+            let mut ts_buf: heapless::String<16> = heapless::String::new();
+            let _ = write!(ts_buf, "{}", reading.timestamp);
+
+            let _ = with_publisher(|p| {
+                Box::pin(async move {
+                    let _ = p
+                        .publish(
+                            state_topic.as_str(),
+                            moist_buf.as_bytes(),
+                            MqQos::AtLeastOnce,
+                            false,
+                        )
+                        .await;
+                    let _ = p
+                        .publish(
+                            raw_topic.as_str(),
+                            raw_buf.as_bytes(),
+                            MqQos::AtLeastOnce,
+                            false,
+                        )
+                        .await;
+                    let _ = p
+                        .publish(
+                            ts_topic.as_str(),
+                            ts_buf.as_bytes(),
+                            MqQos::AtMostOnce,
+                            false,
+                        )
+                        .await;
+                })
+            })
+            .await;
+        }
     }
 }
 
@@ -446,7 +626,7 @@ async fn mqtt_publish_task(
 #[embassy_executor::task]
 async fn network_task(
     mut wifi: esp_radio::wifi::WifiController<'static>,
-    _ifaces: esp_radio::wifi::Interfaces<'static>,
+    ifaces: esp_radio::wifi::Interfaces<'static>,
     client_config: esp_radio::wifi::ClientConfig,
 ) {
     // Set Wi-Fi configuration and start
@@ -479,8 +659,16 @@ async fn network_task(
         Timer::after(Duration::from_millis(100)).await;
     }
 
-    // Signal that network is ready
-    // Note: esp-radio's Interfaces provides the smoltcp stack
+    // Provide Interfaces to TCP adapter users (feature-gated)
+    #[cfg(feature = "mqtt_impl_rust_mqtt")]
+    {
+        let m = ifaces_mutex();
+        let mut g = m.lock().await;
+        *g = Some(ifaces);
+    }
+
+    // Signal that network is ready for consumers
+    // esp-radio's Interfaces provides the smoltcp stack
     // TCP/IP and DHCP are handled by the smoltcp stack within Interfaces
     NETWORK_READY.signal(());
     info!("network: ready, TCP/IP stack available via esp-radio Interfaces");
