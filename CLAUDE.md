@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The name is a nod to the classic Fevicol adhesive commercial where a woman hanging from a cliff says "pakde rehna, chhoddna nahin" (hold on, don't let go) - similar to how houseplants desperately cling to life when neglected.
 
-**Current Status**: Moisture sensing implemented and calibrated. The system can read soil moisture levels via ADC and convert them to meaningful percentages (0-100%). Wi-Fi connectivity is functional. Architecture refactored to separate Embassy tasks for fault isolation between sensor and network operations. MQTT client configuration infrastructure added with connection management task, ready for TCP/MQTT implementation. Still to implement: Full MQTT client TCP integration, actual publishing, pump control, and Home Assistant discovery.
+**Current Status**: Moisture sensing implemented and calibrated. The system can read soil moisture levels via ADC and convert them to meaningful percentages (0-100%). Wi-Fi connectivity is functional. Architecture refactored to separate Embassy tasks for fault isolation between sensor and network operations. MQTT client configuration infrastructure added with connection management task. Home Assistant MQTT Discovery protocol implemented with automatic sensor entity creation (JSON payloads ready for publishing). Still to implement: Full MQTT client TCP integration, actual publishing of discovery and sensor data, pump control.
 
 ## Features
 
@@ -19,9 +19,16 @@ The name is a nod to the classic Fevicol adhesive commercial where a woman hangi
    - Real-time percentage conversion (0-100%)
    - Configurable threshold monitoring (currently 30%)
 2. **Wi-Fi Connectivity**: ✅ STA mode connection with auto-reconnect
+3. **Home Assistant Discovery**: ✅ MQTT Discovery protocol implementation
+   - Auto-discovery messages for moisture percentage sensor
+   - Auto-discovery for raw ADC value sensor (debugging)
+   - Device information with manufacturer, model, version
+   - Availability topic support (online/offline status)
+   - Discovery messages with retain flag for HA restart resilience
+   - Ready to publish when MQTT client is connected
 
 ### In Progress
-3. **MQTT Infrastructure**: 🔧 Configuration and connection management ready
+4. **MQTT Infrastructure**: 🔧 Configuration and connection management ready
    - MQTT 5.0 broker configuration (host, port, credentials)
    - Client ID format: `fevicol-{DEVICE_ID}`
    - Connection task with placeholder for TCP socket integration
@@ -29,10 +36,9 @@ The name is a nod to the classic Fevicol adhesive commercial where a woman hangi
    - Next: Implement TCP socket adapter for esp-radio's smoltcp stack
 
 ### Planned
-4. **MQTT Publishing**: Publish sensor readings to broker (TCP integration required)
-5. **Automatic Watering**: Trigger water pump when moisture falls below threshold
-6. **Pump Control**: GPIO-based relay/MOSFET control with safety limits
-7. **Home Assistant Discovery**: Automatic entity creation via MQTT discovery
+5. **MQTT Publishing**: Publish sensor readings to broker (TCP integration required)
+6. **Automatic Watering**: Trigger water pump when moisture falls below threshold
+7. **Pump Control**: GPIO-based relay/MOSFET control with safety limits
 
 ## Technical Foundation
 
@@ -275,6 +281,107 @@ A calibration routine is preserved as commented code at the end of `src/bin/main
 4. Update `SENSOR_DRY` and `SENSOR_WET` constants with the averages
 5. Restore the monitoring loop
 
+### Home Assistant MQTT Discovery (Implemented)
+
+**Overview**: The project implements the Home Assistant MQTT Discovery protocol for automatic sensor entity creation. When the device connects to the MQTT broker, it publishes discovery messages that tell Home Assistant about available sensors and how to display them.
+
+**Discovery Protocol**:
+- Discovery messages are published to special topics: `homeassistant/{component}/{device_id}/{entity_id}/config`
+- Discovery topics for this project:
+  - `homeassistant/sensor/fevicol-01/moisture/config` - Moisture percentage sensor
+  - `homeassistant/sensor/fevicol-01/raw/config` - Raw ADC value sensor (debugging)
+- All discovery messages are published with `retain=true` so they persist across Home Assistant restarts
+- Discovery messages are re-published on reconnection to handle Home Assistant restarts
+
+**Sensor Entities Created**:
+1. **Moisture Sensor** (`moisture`):
+   - Name: "Moisture Sensor"
+   - Device class: `moisture`
+   - Unit: `%` (percentage)
+   - Icon: `mdi:water-percent`
+   - State topic: `fevicol/{device_id}/{sensor_id}/moisture`
+
+2. **Raw ADC Sensor** (`raw`):
+   - Name: "Moisture Raw ADC"
+   - Unit: `ADC`
+   - Icon: `mdi:chip`
+   - State topic: `fevicol/{device_id}/{sensor_id}/raw`
+   - Purpose: Debugging and calibration verification
+
+**Device Information** (shared by all entities):
+- Device ID: `fevicol-01` (or as configured in `DEVICE_ID`)
+- Device Name: "Fevicol Plant Monitor - fevicol-01"
+- Manufacturer: "Fevicol Project"
+- Model: "ESP32-C6 Moisture Sensor"
+- Software Version: From `Cargo.toml` version (currently 0.1.0)
+
+**Availability Topic**:
+- Topic: `fevicol/{device_id}/status`
+- Payloads: `online` / `offline`
+- Published as `online` after connection
+- Last Will Testament (LWT) will publish `offline` on unexpected disconnect (when MQTT client is implemented)
+- Shows device connectivity status in Home Assistant
+
+**JSON Payload Generation**:
+- Uses `heapless::String<1024>` for manual JSON formatting (no `serde_json` in `no_std`)
+- Helper functions in `src/bin/main.rs`:
+  - `create_moisture_discovery_payload()` - Moisture sensor discovery JSON
+  - `create_raw_discovery_payload()` - Raw ADC sensor discovery JSON
+  - `build_discovery_topic()` - Format discovery topic strings
+  - `build_state_topic()` - Format state topic strings
+  - `build_availability_topic()` - Format availability topic
+
+**Publishing Sequence** (when MQTT client is connected):
+1. Publish availability as `online` (retain=true)
+2. Publish moisture sensor discovery (retain=true)
+3. Publish raw ADC sensor discovery (retain=true)
+4. Small delays (100ms) between publishes to avoid overwhelming broker
+
+**Current Status**: Discovery message generation is fully implemented. Actual publishing awaits MQTT client TCP integration (next step).
+
+### Topic Structure
+
+The MQTT topic hierarchy is organized by device ID and sensor ID for scalability:
+
+**Discovery Topics** (Home Assistant):
+```
+homeassistant/sensor/{device_id}/moisture/config    # Moisture % discovery
+homeassistant/sensor/{device_id}/raw/config         # Raw ADC discovery
+```
+
+**State Topics** (sensor readings):
+```
+fevicol/{device_id}/{sensor_id}/moisture            # Moisture percentage (0-100)
+fevicol/{device_id}/{sensor_id}/raw                 # Raw ADC value (0-4095)
+```
+
+**Status Topics** (availability):
+```
+fevicol/{device_id}/status                          # Device online/offline
+```
+
+**Future Topics** (planned):
+```
+fevicol/{device_id}/pump/status                     # Pump on/off state
+fevicol/{device_id}/pump/command                    # Manual pump control
+fevicol/{device_id}/config/threshold                # Adjust moisture threshold
+```
+
+**Example with default configuration**:
+- Device ID: `fevicol-01`
+- Sensor ID: `moisture-1`
+
+Discovery topics:
+- `homeassistant/sensor/fevicol-01/moisture/config`
+- `homeassistant/sensor/fevicol-01/raw/config`
+
+State topics:
+- `fevicol/fevicol-01/moisture-1/moisture`
+- `fevicol/fevicol-01/moisture-1/raw`
+
+Status topic:
+- `fevicol/fevicol-01/status`
+
 ### MQTT Configuration (Infrastructure Added)
 
 **Configuration Constants** (src/bin/main.rs):
@@ -285,10 +392,16 @@ A calibration routine is preserved as commented code at the end of `src/bin/main
 - `MQTT_USERNAME` / `MQTT_PASSWORD`: Authentication credentials (empty strings for no auth)
 
 **Task Architecture**:
-- `mqtt_connection_task`: Waits for network, logs configuration, signals readiness (placeholder for TCP connection)
+- `mqtt_connection_task`: Waits for network, logs configuration, publishes Home Assistant discovery messages (placeholder), signals readiness
 - `mqtt_publish_task`: Waits for MQTT readiness, receives sensor readings from channel, ready to publish
+- `publish_discovery()`: Async function that generates and publishes discovery messages for all sensors
 
-**Status**: Configuration infrastructure complete. Next step is implementing TCP socket adapter for esp-radio's smoltcp stack to connect rust-mqtt client.
+**Discovery Integration**:
+- Discovery messages are published after successful MQTT connection (before signaling readiness)
+- Discovery is re-published on reconnection to handle Home Assistant restarts
+- Discovery function logs what would be published (actual publishing awaits TCP integration)
+
+**Status**: Configuration infrastructure and Home Assistant discovery protocol complete. Next step is implementing TCP socket adapter for esp-radio's smoltcp stack to connect rust-mqtt client.
 
 ### Next Implementation Steps
 
@@ -296,19 +409,22 @@ A calibration routine is preserved as commented code at the end of `src/bin/main
 - Implement embedded-io adapter for esp-radio's smoltcp TCP socket
 - Integrate rust-mqtt client with adapted socket
 - Implement actual broker connection with MQTT 5.0 protocol
+- Set Last Will Testament (LWT) to publish availability as `offline` on disconnect
 - Add exponential backoff reconnection (2s → 30s max)
 - Implement PINGREQ for connection health monitoring
 
 **MQTT Publishing** (After TCP Integration):
-- Publish topics:
-  - `fevicol/sensor/moisture` - moisture percentage
-  - `fevicol/sensor/raw` - raw ADC value
-  - `fevicol/sensor/timestamp` - reading timestamp
-  - `fevicol/pump/status` - pump on/off state (future)
-- Use Home Assistant MQTT discovery for automatic entity creation
+- Publish Home Assistant discovery messages on connection:
+  - `homeassistant/sensor/{device_id}/moisture/config` (retain=true)
+  - `homeassistant/sensor/{device_id}/raw/config` (retain=true)
+  - `fevicol/{device_id}/status` = `online` (retain=true)
+- Publish sensor readings:
+  - `fevicol/{device_id}/{sensor_id}/moisture` - moisture percentage
+  - `fevicol/{device_id}/{sensor_id}/raw` - raw ADC value
+- Re-publish discovery on reconnection (HA might have restarted)
 - Subscribe topics (future):
-  - `fevicol/pump/command` - manual pump control
-  - `fevicol/config/threshold` - adjust moisture threshold
+  - `fevicol/{device_id}/pump/command` - manual pump control
+  - `fevicol/{device_id}/config/threshold` - adjust moisture threshold
 
 **Pump Control** (Not Yet Implemented):
 - Use GPIO output to control relay or MOSFET for pump power
