@@ -7,17 +7,19 @@
 )]
 
 use defmt::{error, info, warn};
-use esp_hal::analog::adc::{Adc, AdcConfig, Attenuation};
+use esp_hal::analog::adc::{Adc, AdcConfig, AdcPin, Attenuation};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use panic_rtt_target as _;
 
 use embassy_executor::Spawner;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 
 use smoltcp::wire::Ipv4Address;
+use static_cell::StaticCell;
 
 // Optional local secrets support
 #[cfg(feature = "local_secrets")]
@@ -31,8 +33,33 @@ extern crate alloc;
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
+// Type aliases for moisture sensor task parameters
+type MoistureAdc = Adc<'static, esp_hal::peripherals::ADC1<'static>, esp_hal::Blocking>;
+type MoistureAdcPin =
+    AdcPin<esp_hal::peripherals::GPIO0<'static>, esp_hal::peripherals::ADC1<'static>>;
+
+// Device and sensor identifiers for MQTT topic namespacing
+// TODO: Consider generating DEVICE_ID from MAC address suffix for uniqueness
+const DEVICE_ID: &str = "fevicol-01";
+const SENSOR_ID: &str = "moisture-1";
+
+/// Sensor reading data structure for inter-task communication
+#[derive(Clone, Copy, defmt::Format)]
+struct SensorReading {
+    /// Moisture percentage (0-100%)
+    moisture: u8,
+    /// Raw ADC value (0-4095)
+    raw: u16,
+    /// Timestamp in milliseconds since boot
+    timestamp: u64,
+}
+
 // Signal to notify when network is ready
 static NETWORK_READY: Signal<CriticalSectionRawMutex, Ipv4Address> = Signal::new();
+
+// Channel for passing sensor readings from sensor task to MQTT publisher
+// Capacity of 20 readings allows buffering ~100 seconds of data during network outages
+static SENSOR_CHANNEL: StaticCell<Channel<NoopRawMutex, SensorReading, 20>> = StaticCell::new();
 
 // Calibration constants from sensor calibration routine
 const SENSOR_DRY: u16 = 2188; // ADC value when sensor is in air (0% moisture)
@@ -55,6 +82,108 @@ fn raw_to_moisture_percent(raw: u16) -> u8 {
     let offset = raw - SENSOR_DRY;
     let percent = (offset as u32 * 100) / range as u32;
     percent.min(100) as u8
+}
+
+/// Moisture sensor task: reads ADC periodically and sends readings to MQTT publisher
+#[embassy_executor::task]
+async fn moisture_sensor_task(
+    mut adc: MoistureAdc,
+    mut pin: MoistureAdcPin,
+    sender: embassy_sync::channel::Sender<'static, NoopRawMutex, SensorReading, 20>,
+) {
+    info!("sensor: task started");
+
+    loop {
+        // Read soil moisture sensor
+        match adc.read_oneshot(&mut pin) {
+            Ok(raw) => {
+                let moisture_percent = raw_to_moisture_percent(raw);
+                let timestamp = Instant::now().as_millis();
+
+                let reading = SensorReading {
+                    moisture: moisture_percent,
+                    raw,
+                    timestamp,
+                };
+
+                // Try to send reading to MQTT publisher (non-blocking)
+                if sender.try_send(reading).is_err() {
+                    warn!("sensor: channel full, dropping reading");
+                }
+
+                // Log moisture level and check threshold
+                if moisture_percent < MOISTURE_THRESHOLD {
+                    warn!(
+                        "sensor: moisture={}% (raw={}), BELOW threshold {}% - pump should activate",
+                        moisture_percent, raw, MOISTURE_THRESHOLD
+                    );
+                } else {
+                    info!(
+                        "sensor: moisture={}% (raw={}), above threshold",
+                        moisture_percent, raw
+                    );
+                }
+            }
+            Err(_) => {
+                error!("sensor: ADC read failed");
+            }
+        }
+
+        // Read every 5 seconds
+        Timer::after(Duration::from_secs(5)).await;
+    }
+}
+
+/// MQTT connection management task: maintains connection to MQTT broker
+#[embassy_executor::task]
+async fn mqtt_connection_task() {
+    info!("mqtt: connection task started, waiting for network...");
+
+    // Wait for network to be ready
+    let ip = NETWORK_READY.wait().await;
+    info!("mqtt: network ready at {}", ip);
+
+    // TODO: Implement MQTT client initialization and connection management
+    // - Create TCP socket
+    // - Connect to MQTT broker
+    // - Handle reconnection on disconnect
+    // - Share MQTT client state with publish task
+
+    info!("mqtt: connection task placeholder - waiting for implementation");
+
+    // Sleep indefinitely until MQTT client is implemented
+    loop {
+        Timer::after(Duration::from_secs(3600)).await;
+    }
+}
+
+/// MQTT publishing task: receives sensor readings and publishes to broker
+#[embassy_executor::task]
+async fn mqtt_publish_task(
+    receiver: embassy_sync::channel::Receiver<'static, NoopRawMutex, SensorReading, 20>,
+    device_id: &'static str,
+    sensor_id: &'static str,
+) {
+    info!(
+        "mqtt: publish task started for device={}, sensor={}",
+        device_id, sensor_id
+    );
+
+    loop {
+        // Receive sensor reading from channel (blocks until available)
+        let reading = receiver.receive().await;
+
+        // TODO: Publish to MQTT broker when client is implemented
+        // Topics to publish:
+        //   - {device_id}/sensor/{sensor_id}/moisture (percentage)
+        //   - {device_id}/sensor/{sensor_id}/raw (ADC value)
+        //   - {device_id}/sensor/{sensor_id}/timestamp
+
+        info!(
+            "mqtt: would publish - moisture={}%, raw={}, timestamp={}ms",
+            reading.moisture, reading.raw, reading.timestamp
+        );
+    }
 }
 
 /// Network task: manages Wi-Fi connection
@@ -122,40 +251,6 @@ async fn network_task(
         }
     }
 }
-
-// TODO: Re-enable sensor task once we resolve the generic task function limitation
-// embassy_executor::task doesn't support generic parameters
-// For now, sensor reading is done in the main loop
-/*
-/// Sensor task: reads soil moisture sensor periodically
-#[embassy_executor::task]
-async fn sensor_task<PIN>(
-    mut adc: Adc<'static, esp_hal::peripherals::ADC1<'static>, Blocking>,
-    mut pin: AdcPin<PIN, esp_hal::peripherals::ADC1<'static>>,
-) {
-    info!("sensor: task started");
-
-    // Wait for network to be ready before starting sensor readings
-    let ip = NETWORK_READY.wait().await;
-    info!("sensor: network ready at {}, starting readings", ip);
-
-    loop {
-        // Read soil moisture sensor
-        match adc.read_oneshot(&mut pin) {
-            Ok(raw) => {
-                info!("sensor: moisture raw={} (0..4095)", raw);
-                // TODO: Publish to MQTT when MQTT client is implemented
-            }
-            Err(_) => {
-                error!("sensor: ADC read failed");
-            }
-        }
-
-        // Read every 5 seconds
-        Timer::after(Duration::from_secs(5)).await;
-    }
-}
-*/
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -230,15 +325,29 @@ async fn main(spawner: Spawner) -> ! {
         warn!("wifi: set WIFI_SSID/WIFI_PASS env vars at build time to enable STA connection");
     }
 
+    // Initialize sensor reading channel for inter-task communication
+    let sensor_channel = SENSOR_CHANNEL.init(Channel::new());
+    let sensor_sender = sensor_channel.sender();
+    let sensor_receiver = sensor_channel.receiver();
+
+    // Spawn MQTT connection management task
+    spawner.spawn(mqtt_connection_task()).ok();
+
+    // Spawn MQTT publishing task
+    spawner
+        .spawn(mqtt_publish_task(sensor_receiver, DEVICE_ID, SENSOR_ID))
+        .ok();
+
     // Set up ADC1 on pin A0 (XIAO ESP32-C6: A0 = GPIO0). Power the sensor from 3V3, not 5V.
     // esp-hal v1.0 API uses AdcConfig + enable_pin on the GPIO peripheral directly.
     let mut adc1_cfg = AdcConfig::new();
-    let mut a0 = adc1_cfg.enable_pin(peripherals.GPIO0, Attenuation::_6dB);
-    let mut adc1 = Adc::new(peripherals.ADC1, adc1_cfg);
+    let a0 = adc1_cfg.enable_pin(peripherals.GPIO0, Attenuation::_6dB);
+    let adc1 = Adc::new(peripherals.ADC1, adc1_cfg);
 
-    // TODO: Spawn sensor reading task once we resolve generic task issue
-    // For now, read sensor in main loop
-    // spawner.spawn(sensor_task(adc1, a0)).ok();
+    // Spawn moisture sensor task
+    spawner
+        .spawn(moisture_sensor_task(adc1, a0, sensor_sender))
+        .ok();
 
     info!("application: all tasks spawned");
     info!(
@@ -246,38 +355,12 @@ async fn main(spawner: Spawner) -> ! {
         SENSOR_DRY, SENSOR_WET
     );
     info!("sensor: watering threshold = {}%", MOISTURE_THRESHOLD);
+    info!("sensor: device_id={}, sensor_id={}", DEVICE_ID, SENSOR_ID);
 
-    // Main sensor monitoring loop
-    // Reads moisture sensor and displays percentage
-    // TODO: Add MQTT publishing when network stack is implemented
-    // TODO: Add pump control when moisture drops below threshold
-
+    // Main loop: all work is now done in spawned tasks
+    // This loop just keeps the executor alive
     loop {
-        match adc1.read_oneshot(&mut a0) {
-            Ok(raw) => {
-                let moisture_percent = raw_to_moisture_percent(raw);
-
-                if moisture_percent < MOISTURE_THRESHOLD {
-                    warn!(
-                        "sensor: moisture={}% (raw={}), BELOW threshold {}% - pump should activate",
-                        moisture_percent, raw, MOISTURE_THRESHOLD
-                    );
-                } else {
-                    info!(
-                        "sensor: moisture={}% (raw={}), above threshold",
-                        moisture_percent, raw
-                    );
-                }
-
-                // TODO: Publish to MQTT when implemented
-                // TODO: Trigger pump when below threshold
-            }
-            Err(_) => {
-                error!("sensor: ADC read failed");
-            }
-        }
-
-        Timer::after(Duration::from_secs(5)).await;
+        Timer::after(Duration::from_secs(3600)).await;
     }
 }
 
