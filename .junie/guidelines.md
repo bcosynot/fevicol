@@ -42,6 +42,17 @@ Build and Run
   - `wokwi.toml` configures a GDB server on port 3333 and points to the debug ELF: `target/riscv32imac-unknown-none-elf/debug/fevicol`.
   - Typical flow: build with `cargo build`, then connect your debugger to localhost:3333 per Wokwi docs.
 
+Code Quality and Formatting
+
+- **Formatting** (mandatory before commits)
+  - Run `cargo fmt --all` to format all code according to project style
+  - Verify with `cargo fmt --all -- --check` before committing
+  - **Important**: A temporary `src/bin/secrets.rs` file must exist (even if empty) for `cargo fmt` to work, as it needs to resolve the conditional `mod secrets` declaration
+
+- **Linting** (recommended)
+  - Run `cargo clippy --all-features --workspace -- -D warnings` to catch common issues
+  - Address all clippy warnings before committing
+
 Architecture and Runtime Notes
 
 - no_std + Embassy

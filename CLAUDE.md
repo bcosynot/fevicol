@@ -85,6 +85,10 @@ cargo build --release  # Currently has linker issues
 cargo fmt --all -- --check
 ```
 
+**Note**: A temporary `src/bin/secrets.rs` file must exist for `cargo fmt` to work (even if empty), as the formatter needs to resolve the conditional `mod secrets`. This file is git-ignored and used for local Wi-Fi credentials.
+
+**Important**: Always run `cargo fmt --all` and fix any formatting issues before committing code changes.
+
 ### Lint
 ```bash
 cargo clippy --all-features --workspace -- -D warnings
