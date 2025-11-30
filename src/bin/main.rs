@@ -207,7 +207,7 @@ async fn main(spawner: Spawner) -> ! {
                         Ok(v) => v,
                         Err(e) => {
                             error!("wifi new() failed: {:?}", e);
-                            loop {}
+                            panic!("wifi initialization failed");
                         }
                     };
 
