@@ -2,14 +2,6 @@
 	"name": "Fevicol ESP32-C6 Dev Container",
 	"image": "espressif/idf-rust:esp32c6_1.88.0.0",
 
-	"features": {
-		"ghcr.io/devcontainers/features/common-utils:2": {
-			"installZsh": true,
-			"configureZshAsDefaultShell": true,
-			"installOhMyZsh": true
-		}
-	},
-
 	"postCreateCommand": "bash .devcontainer/setup.sh",
 
 	"customizations": {

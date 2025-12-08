@@ -4,16 +4,12 @@ set -e
 echo "Setting up Fevicol development environment..."
 
 # Install system dependencies required by probe-rs-tools
-echo "Installing system dependencies..."
-sudo apt-get update && sudo apt-get install -y libudev-dev
-
-# Install probe-rs tools for flashing and debugging
-echo "Installing probe-rs-tools..."
-cargo install probe-rs-tools --locked
-
-# Install useful development tools
-echo "Installing additional tools..."
-cargo install cargo-expand || true
+#echo "Installing system dependencies..."
+#sudo apt-get update && sudo apt-get install -y libudev-dev
+#
+## Install probe-rs tools for flashing and debugging
+#echo "Installing probe-rs-tools..."
+#cargo install probe-rs-tools --locked
 
 # Set up udev rules for probe-rs (only if /dev/bus/usb exists - i.e., local dev with USB passthrough)
 if [ -d "/dev/bus/usb" ]; then
