@@ -111,7 +111,7 @@ Testing
   - Integration with `embassy-net` TCP stack for high-level network operations
 
 - Abstraction and publish semantics
-  - Crate‑agnostic MQTT publish interface in `src/bin/main.rs`:
+  - Crate‑agnostic MQTT publish interface in `src/mqtt/client.rs`: 
     - `enum MqQos { AtMostOnce, AtLeastOnce }`
     - `trait MqttPublish { async fn publish(&mut self, topic: &str, payload: &[u8], qos: MqQos, retain: bool) -> Result<(), Self::Err>; }`
   - `publish_discovery(client, device_id, sensor_id) -> Result<(), _>` publishes retained availability and Home Assistant discovery configs with QoS 1 and ~100 ms pacing between publishes.

@@ -24,6 +24,7 @@
  Key files:
  - src/bin/main.rs — application entrypoint (`#[esp_rtos::main] async fn main(...) -> !`)
  - src/lib.rs — library crate root (`#![no_std]`)
+ - src/mqtt/ — MQTT module (client.rs holds client abstraction and rust-mqtt integration)
  - build.rs — links `defmt.x`, forces `linkall.x`, and provides helpful linker diagnostics
  - .cargo/config.toml — runner, target, rustflags, build‑std settings
  - rust-toolchain.toml — pins stable + installs `rust-src` and the target

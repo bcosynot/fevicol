@@ -13,23 +13,23 @@ This document provides a detailed task breakdown for implementing the refactorin
 **Reference**: Plan sections "Phase 1: Extract MQTT Client Module" and "Proposed Module Structure"
 
 #### Sub-phase 1.1: Create Module Structure
-- [ ] (Phase 1.1) Create the `src/mqtt/` directory structure
-- [ ] (Phase 1.1) Create `src/mqtt/mod.rs` with placeholder module declarations
-- [ ] (Phase 1.1) Create empty `src/mqtt/client.rs` file
-- [ ] (Phase 1.1) Update `src/lib.rs` to declare the `mqtt` module
+- [x] (Phase 1.1) Create the `src/mqtt/` directory structure
+- [x] (Phase 1.1) Create `src/mqtt/mod.rs` with placeholder module declarations
+- [x] (Phase 1.1) Create empty `src/mqtt/client.rs` file
+- [x] (Phase 1.1) Update `src/lib.rs` to declare the `mqtt` module
 
 #### Sub-phase 1.2: Extract Core MQTT Types
-- [ ] (Phase 1.2) Move `MqQos` enum from `main.rs` to `src/mqtt/client.rs`
-- [ ] (Phase 1.2) Move `MqttPublish` trait from `main.rs` to `src/mqtt/client.rs`
-- [ ] (Phase 1.2) Move `LoggerPublisher` struct and its `MqttPublish` impl to `src/mqtt/client.rs`
-- [ ] (Phase 1.2) Add appropriate visibility modifiers (`pub`, `pub(crate)`) to exported items
-- [ ] (Phase 1.2) Add re-exports in `src/mqtt/mod.rs` for public API
+- [x] (Phase 1.2) Move `MqQos` enum from `main.rs` to `src/mqtt/client.rs`
+- [x] (Phase 1.2) Move `MqttPublish` trait from `main.rs` to `src/mqtt/client.rs`
+- [x] (Phase 1.2) Move `LoggerPublisher` struct and its `MqttPublish` impl to `src/mqtt/client.rs`
+- [x] (Phase 1.2) Add appropriate visibility modifiers (`pub`, `pub(crate)`) to exported items
+- [x] (Phase 1.2) Add re-exports in `src/mqtt/mod.rs` for public API
 
 #### Sub-phase 1.3: Extract Transport Adapter (feature-gated)
-- [ ] (Phase 1.3) Move `EmbassyNetTransport` struct to `src/mqtt/client.rs`
-- [ ] (Phase 1.3) Move `EmbassyNetTransport::new()` and `socket_mut()` methods
-- [ ] (Phase 1.3) Move `ErrorType`, `Read`, and `IoWrite` trait implementations
-- [ ] (Phase 1.3) Wrap with `#[cfg(feature = "mqtt")]` attribute
+- [x] (Phase 1.3) Move `EmbassyNetTransport` struct to `src/mqtt/client.rs`
+- [x] (Phase 1.3) Move `EmbassyNetTransport::new()` and `socket_mut()` methods
+- [x] (Phase 1.3) Move `ErrorType`, `Read`, and `IoWrite` trait implementations
+- [x] (Phase 1.3) Wrap with `#[cfg(feature = "mqtt")]` attribute
 - [ ] (Phase 1.3) Add necessary imports for `embassy_net`, `embedded_io_async` types
 
 #### Sub-phase 1.4: Extract Client Wrapper (feature-gated)

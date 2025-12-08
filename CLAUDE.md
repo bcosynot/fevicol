@@ -73,7 +73,7 @@ The project uses **rust-mqtt v0.3** as the primary MQTT client, providing full M
 
 ### MQTT Client Abstraction
 
-`src/bin/main.rs` defines a minimal MQTT publish interface to decouple the app from a specific client crate:
+`src/mqtt/client.rs` defines a minimal MQTT publish interface to decouple the app from a specific client crate:
 - `enum MqQos { AtMostOnce, AtLeastOnce }`
 - `trait MqttPublish { async fn publish(&mut self, topic: &str, payload: &[u8], qos: MqQos, retain: bool) -> Result<(), Self::Err>; }`
 - `publish_discovery` accepts `&mut impl MqttPublish` and returns `Result`, publishing retained availability and Home Assistant discovery payloads with pacing.
@@ -141,7 +141,7 @@ The project uses rust-mqtt v0.3 as the MQTT client because it provides complete 
 
 **Transport Adapter**:
 
-The `EmbassyNetTransport` struct (src/bin/main.rs) adapts `embassy_net::tcp::TcpSocket` for use with rust-mqtt:
+The `EmbassyNetTransport` struct (src/mqtt/client.rs) adapts `embassy_net::tcp::TcpSocket` for use with rust-mqtt:
 ```rust
 struct EmbassyNetTransport<'a> {
     socket: embassy_net::tcp::TcpSocket<'a>,
