@@ -11,14 +11,6 @@ sudo apt-get update && sudo apt-get install -y libudev-dev
 echo "Installing probe-rs-tools..."
 cargo install probe-rs-tools --locked
 
-# Install the required Rust target
-echo "Adding RISC-V target..."
-rustup target add riscv32imac-unknown-none-elf
-
-# Install rust-src component for build-std
-echo "Adding rust-src component..."
-rustup component add rust-src
-
 # Install useful development tools
 echo "Installing additional tools..."
 cargo install cargo-expand || true
