@@ -3,13 +3,12 @@
  Fevicol is embedded firmware for the Seeed Studio Xiao ESP32‑C6 that:
  - Reads a resistive soil‑moisture sensor via ADC1 (GPIO0/A0)
  - Converts raw readings to a calibrated 0–100% moisture value
- - Connects to Wi‑Fi (STA) and will publish telemetry via MQTT (planned)
+ - Connects to Wi‑Fi (STA) and publishes telemetry to Home Assistant via MQTT v5
  - Will control a small water pump via a GPIO output with safety limits (planned)
  
- Status as of 2025‑11‑29:
- - Implemented: moisture sensing + calibration, threshold monitoring, Wi‑Fi STA with auto‑reconnect, RTT logging
- - Pending: TCP/IP stack integration (embassy‑net), MQTT to Home Assistant, pump control GPIO, safety limits
- - Known issue: release builds currently fail with esp‑radio NVS linker errors — use debug builds
+ Status as of 2025‑12‑07:
+ - **Implemented**: moisture sensing + calibration, threshold monitoring, Wi‑Fi STA with auto‑reconnect, **MQTT v5 integration with rust-mqtt v0.3** (TCP connection via embassy-net, DNS resolution, authentication, LWT, Home Assistant MQTT Discovery, telemetry publishing every 5 seconds, exponential backoff reconnection), RTT logging
+ - **Pending**: pump control GPIO, safety limits, automatic watering logic
  
  
  ## Stack and Tooling
@@ -90,8 +89,110 @@
    ```
    Build with: `cargo run --features local_secrets`
  - PROBE_RS_PROBE — optional, to select a specific debug probe
- 
- 
+
+ ### MQTT v5 Integration (Fully Implemented)
+
+ **Feature Flag**:
+ - `mqtt` — Enables rust-mqtt v0.3 MQTT v5 client with embassy-net
+ - Default build (no feature): Uses log-only mode for testing without a broker
+
+ **Building with MQTT**:
+ ```bash
+ # With MQTT v5 client (recommended for production)
+ cargo run --release --features mqtt
+
+ # With MQTT + local secrets
+ cargo run --release --features mqtt,local_secrets
+
+ # Without MQTT (log-only mode for testing)
+ cargo run --release
+ ```
+
+ **MQTT Broker Configuration**:
+
+ Edit the constants in `src/bin/main.rs` to match your network:
+ ```rust
+ const MQTT_BROKER_HOST: &str = "192.168.1.100";  // Your broker IP or hostname
+ const MQTT_BROKER_PORT: u16 = 1883;              // Standard MQTT port
+ const MQTT_USERNAME: &str = "";                   // Leave empty for no auth
+ const MQTT_PASSWORD: &str = "";                   // Leave empty for no auth
+ const DEVICE_ID: &str = "fevicol-01";            // Unique device identifier
+ const SENSOR_ID: &str = "moisture-1";            // Sensor identifier
+ ```
+
+ **MQTT v5 Features**:
+ - Protocol: MQTT v5 with session expiry (3600s)
+ - Authentication: Username/password support
+ - Last Will Testament (LWT): Publishes `offline` to `fevicol/{device_id}/status` on disconnect
+ - Availability: Publishes `online` to status topic after connection (retained)
+ - Home Assistant MQTT Discovery: Automatic sensor entity creation
+ - Telemetry: Publishes moisture % and raw ADC value every 5 seconds
+ - Resilience: Exponential backoff reconnection (2s → 30s max), DNS resolution with fallback to IP
+ - Network Stack: embassy-net with DHCP and DNS via esp-radio Wi-Fi device
+
+ **Home Assistant Integration**:
+
+ The firmware uses MQTT Discovery protocol for automatic sensor entity creation in Home Assistant.
+
+ 1. **Prerequisites**:
+    - Home Assistant with MQTT integration enabled
+    - MQTT broker (Mosquitto, Home Assistant built-in broker, etc.)
+    - Broker accessible from ESP32-C6 network
+
+ 2. **Setup Steps**:
+    - Configure MQTT broker in Home Assistant (Settings → Devices & Services → MQTT)
+    - Update `MQTT_BROKER_HOST` in `src/bin/main.rs` to your broker IP/hostname
+    - Set `MQTT_USERNAME` and `MQTT_PASSWORD` if your broker requires authentication
+    - Build and flash firmware with `mqtt` feature
+    - Device will automatically appear in Home Assistant after connection
+
+ 3. **Discovered Entities**:
+    - **Moisture Sensor** (`sensor.fevicol_01_moisture`):
+      - Device class: `moisture`
+      - Unit: `%` (percentage)
+      - Icon: `mdi:water-percent`
+      - State topic: `fevicol/{device_id}/{sensor_id}/moisture`
+    - **Raw ADC Sensor** (`sensor.fevicol_01_raw`):
+      - Unit: `ADC`
+      - Icon: `mdi:chip`
+      - State topic: `fevicol/{device_id}/{sensor_id}/raw`
+      - Purpose: Debugging and calibration verification
+
+ 4. **Device Information**:
+    - Device ID: `fevicol-01` (configurable via `DEVICE_ID` constant)
+    - Device Name: "Fevicol Plant Monitor - fevicol-01"
+    - Manufacturer: "Fevicol Project"
+    - Model: "ESP32-C6 Moisture Sensor"
+    - Software Version: From `Cargo.toml` version
+
+ 5. **Availability Tracking**:
+    - Availability topic: `fevicol/{device_id}/status`
+    - Online: Published as `online` (retained) after connection
+    - Offline: Published as `offline` (retained) via LWT on unexpected disconnect
+    - Shows device connectivity status in Home Assistant
+
+ 6. **MQTT Topics**:
+    ```
+    # Discovery (published on connect/reconnect with retain=true)
+    homeassistant/sensor/fevicol-01/moisture/config
+    homeassistant/sensor/fevicol-01/raw/config
+   
+    # State (published every 5 seconds)
+    fevicol/fevicol-01/moisture-1/moisture    # Moisture percentage (0-100)
+    fevicol/fevicol-01/moisture-1/raw         # Raw ADC value (0-4095)
+   
+    # Availability (retained)
+    fevicol/fevicol-01/status                 # online/offline
+    ```
+
+ 7. **Troubleshooting**:
+    - Check RTT logs for connection status: `DEFMT_LOG=debug cargo run --features mqtt`
+    - Verify broker is reachable: ping broker IP from ESP32-C6 network
+    - Check MQTT broker logs for connection attempts
+    - Verify Home Assistant MQTT integration is enabled
+    - Ensure discovery prefix is `homeassistant` (default in HA)
+
+
  ## Tests
  This project uses `embedded-test` with the Embassy executor and an external scheduler hosted by `esp-rtos`.
  
@@ -162,12 +263,14 @@
  
  
  ## Roadmap / TODOs
- - MQTT integration to Home Assistant (embassy‑net TCP/IP + MQTT client)
+ - ✅ ~~MQTT v5 integration to Home Assistant (embassy‑net TCP/IP + rust-mqtt client)~~ — **Completed**
+ - ✅ ~~Home Assistant MQTT discovery for auto‑entity provisioning~~ — **Completed**
  - Pump control GPIO + safety limits (max run time, minimum interval between activations)
- - Home Assistant MQTT discovery for auto‑entity provisioning
+ - Automatic watering logic based on moisture threshold
  - Resolve release‑mode linker errors with esp‑radio NVS
  - Add CI (fmt, clippy, `cargo test --no-run`)
  - Add board/pin diagram and wiring guide
+ - MQTT command topics for manual pump control and threshold adjustment
  
  
  ## License
