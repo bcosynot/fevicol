@@ -30,22 +30,22 @@ This document provides a detailed task breakdown for implementing the refactorin
 - [x] (Phase 1.3) Move `EmbassyNetTransport::new()` and `socket_mut()` methods
 - [x] (Phase 1.3) Move `ErrorType`, `Read`, and `IoWrite` trait implementations
 - [x] (Phase 1.3) Wrap with `#[cfg(feature = "mqtt")]` attribute
-- [ ] (Phase 1.3) Add necessary imports for `embassy_net`, `embedded_io_async` types
+- [x] (Phase 1.3) Add necessary imports for `embassy_net`, `embedded_io_async` types
 
 #### Sub-phase 1.4: Extract Client Wrapper (feature-gated)
-- [ ] (Phase 1.4) Move `RustMqttPublisher` struct to `src/mqtt/client.rs`
-- [ ] (Phase 1.4) Move `MqttPublish` implementation for `RustMqttPublisher`
-- [ ] (Phase 1.4) Move `interpret_connack_reason` function
-- [ ] (Phase 1.4) Move `MqttClientConfig` struct
-- [ ] (Phase 1.4) Move `init_rust_mqtt_client` function
-- [ ] (Phase 1.4) Wrap all with `#[cfg(feature = "mqtt")]` attribute
-- [ ] (Phase 1.4) Add necessary imports for `rust_mqtt` types
+- [x] (Phase 1.4) Move `RustMqttPublisher` struct to `src/mqtt/client.rs`
+- [x] (Phase 1.4) Move `MqttPublish` implementation for `RustMqttPublisher`
+- [x] (Phase 1.4) Move `interpret_connack_reason` function
+- [x] (Phase 1.4) Move `MqttClientConfig` struct
+- [x] (Phase 1.4) Move `init_rust_mqtt_client` function
+- [x] (Phase 1.4) Wrap all with `#[cfg(feature = "mqtt")]` attribute
+- [x] (Phase 1.4) Add necessary imports for `rust_mqtt` types
 
 #### Sub-phase 1.5: Update main.rs Imports
-- [ ] (Phase 1.5) Remove extracted code from `main.rs`
-- [ ] (Phase 1.5) Add import statements for the new `mqtt::client` module items
-- [ ] (Phase 1.5) Update any type references to use the new module path
-- [ ] (Phase 1.5) Verify feature-gated imports work correctly for both `mqtt` and non-`mqtt` builds
+- [x] (Phase 1.5) Remove extracted code from `main.rs`
+- [x] (Phase 1.5) Add import statements for the new `mqtt::client` module items
+- [x] (Phase 1.5) Update any type references to use the new module path
+- [x] (Phase 1.5) Verify feature-gated imports work correctly for both `mqtt` and non-`mqtt` builds
 
 #### Sub-phase 1.6: Verification and Quality Checks
 - [ ] (Phase 1.6) Run `cargo fmt --all -- --check` and fix any formatting issues
@@ -55,9 +55,9 @@ This document provides a detailed task breakdown for implementing the refactorin
 - [ ] (Phase 1.6) Run `cargo test --no-run` to verify test compilation
 
 #### Sub-phase 1.7: Documentation Updates
-- [ ] (Phase 1.7) Update `CLAUDE.md` section "MQTT Client Implementation" to reference new module location
-- [ ] (Phase 1.7) Update `guidelines.md` section "MQTT Client Implementation" to reference new module location
-- [ ] (Phase 1.7) Update `README.md` "Project Structure" section to reflect new `src/mqtt/` directory
+- [x] (Phase 1.7) Update `CLAUDE.md` section "MQTT Client Implementation" to reference new module location
+- [x] (Phase 1.7) Update `guidelines.md` section "MQTT Client Implementation" to reference new module location
+- [x] (Phase 1.7) Update `README.md` "Project Structure" section to reflect new `src/mqtt/` directory
 
 ---
 

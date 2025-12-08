@@ -7,4 +7,10 @@ pub mod client;
 pub use client::{MqQos, MqttPublish, LoggerPublisher};
 
 #[cfg(feature = "mqtt")]
-pub use client::{EmbassyNetTransport, MqttClientConfig, RustMqttPublisher, init_rust_mqtt_client};
+pub use client::{
+    EmbassyNetTransport,
+    MqttClientConfig,
+    RustMqttPublisher,
+    init_rust_mqtt_client,
+    interpret_connack_reason,
+};
