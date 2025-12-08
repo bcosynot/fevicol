@@ -233,19 +233,24 @@ fn interpret_connack_reason(
     }
 }
 
+/// Configuration for initializing rust-mqtt client
+#[cfg(feature = "mqtt")]
+pub struct MqttClientConfig<'a> {
+    pub client_id: &'a str,
+    pub keep_alive_secs: u16,
+    pub session_expiry_secs: u32,
+    pub username: &'a str,
+    pub password: &'a str,
+    pub lwt_topic: &'a str,
+    pub lwt_payload: &'a [u8],
+    pub lwt_retain: bool,
+}
+
 /// Initialize rust-mqtt client with full MQTT v5 configuration.
 ///
 /// # Parameters
 /// - `transport`: EmbassyNetTransport wrapping a connected TCP socket
-/// - `client_id`: Unique client identifier (e.g., "fevicol-01")
-/// - `keep_alive_secs`: Keep-alive interval in seconds
-/// - `session_expiry_secs`: Session expiry interval in seconds (MQTT v5 property)
-/// - `username`: MQTT username (empty string for no authentication)
-/// - `password`: MQTT password (empty string for no authentication)
-/// - `lwt_topic`: Last Will Testament topic
-/// - `lwt_payload`: Last Will Testament payload
-/// - `lwt_qos`: Last Will Testament QoS level
-/// - `lwt_retain`: Last Will Testament retain flag
+/// - `config`: MQTT client configuration (credentials, keep-alive, LWT, etc.)
 /// - `recv_buffer`: Buffer for receiving MQTT packets
 /// - `write_buffer`: Buffer for writing MQTT packets
 ///
@@ -254,15 +259,7 @@ fn interpret_connack_reason(
 #[cfg(feature = "mqtt")]
 pub async fn init_rust_mqtt_client<'a>(
     transport: EmbassyNetTransport<'a>,
-    client_id: &'a str,
-    keep_alive_secs: u16,
-    session_expiry_secs: u32,
-    username: &'a str,
-    password: &'a str,
-    lwt_topic: &'a str,
-    lwt_payload: &'a [u8],
-    _lwt_qos: QualityOfService,
-    lwt_retain: bool,
+    config: MqttClientConfig<'a>,
     recv_buffer: &'a mut [u8],
     write_buffer: &'a mut [u8],
 ) -> Result<RustMqttPublisher<'a, EmbassyNetTransport<'a>>, ReasonCode> {
@@ -271,11 +268,11 @@ pub async fn init_rust_mqtt_client<'a>(
 
     let rng = CountingRng(0);
 
-    let mut config = ClientConfig::new(rust_mqtt::client::client_config::MqttVersion::MQTTv5, rng);
+    let mut client_config = ClientConfig::new(rust_mqtt::client::client_config::MqttVersion::MQTTv5, rng);
 
-    config.add_client_id(client_id);
-    config.keep_alive = keep_alive_secs;
-    config.add_property(Property::SessionExpiryInterval(session_expiry_secs));
+    client_config.add_client_id(config.client_id);
+    client_config.keep_alive = config.keep_alive_secs;
+    client_config.add_property(Property::SessionExpiryInterval(config.session_expiry_secs));
 
     // Note: Clean start flag is hardcoded to true (0x02) in rust-mqtt v0.3.0
     // The library does not provide an API to set clean start to false.
@@ -284,15 +281,15 @@ pub async fn init_rust_mqtt_client<'a>(
     // For true session persistence (clean start = false), a library update or
     // alternative MQTT client would be required.
 
-    if !username.is_empty() {
-        config.add_username(username);
-        if !password.is_empty() {
-            config.add_password(password);
+    if !config.username.is_empty() {
+        client_config.add_username(config.username);
+        if !config.password.is_empty() {
+            client_config.add_password(config.password);
         }
     }
 
     // LWT QoS is not configurable in rust-mqtt v0.3
-    config.add_will(lwt_topic, lwt_payload, lwt_retain);
+    client_config.add_will(config.lwt_topic, config.lwt_payload, config.lwt_retain);
 
     let mut client = MqttClient::<_, 5, _>::new(
         transport,
@@ -300,7 +297,7 @@ pub async fn init_rust_mqtt_client<'a>(
         write_buffer.len(),
         recv_buffer,
         recv_buffer.len(),
-        config,
+        client_config,
     );
 
     match client.connect_to_broker().await {
@@ -722,8 +719,6 @@ async fn mqtt_connection_task(
     // rust-mqtt implementation with full MQTT v5 support
     #[cfg(feature = "mqtt")]
     {
-        use rust_mqtt::packet::v5::publish_packet::QualityOfService;
-
         // --- Error Handling Strategy: Exponential Backoff ---
         // Start at 2s, double on each failure, max 30s
         // This prevents overwhelming the broker/network during outages while
@@ -872,17 +867,20 @@ async fn mqtt_connection_task(
             let lwt_topic = build_availability_topic(DEVICE_ID);
             let lwt_payload = b"offline";
 
+            let mqtt_config = MqttClientConfig {
+                client_id: DEVICE_ID,
+                keep_alive_secs: MQTT_KEEP_ALIVE_SECS,
+                session_expiry_secs: MQTT_SESSION_EXPIRY_SECS,
+                username: mqtt_username,
+                password: mqtt_password,
+                lwt_topic: lwt_topic.as_str(),
+                lwt_payload,
+                lwt_retain: true,
+            };
+
             match init_rust_mqtt_client(
                 transport,
-                DEVICE_ID,
-                MQTT_KEEP_ALIVE_SECS,
-                MQTT_SESSION_EXPIRY_SECS,
-                mqtt_username,
-                mqtt_password,
-                lwt_topic.as_str(),
-                lwt_payload,
-                QualityOfService::QoS1,
-                true, // LWT retain
+                mqtt_config,
                 &mut mqtt_recv_buffer,
                 &mut mqtt_write_buffer,
             )
