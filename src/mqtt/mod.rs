@@ -4,7 +4,7 @@
 pub mod client;
 
 // Re-exports for cleaner imports from crate::mqtt
-pub use client::{MqQos, MqttPublish};
+pub use client::{MqQos, MqttPublish, LoggerPublisher};
 
 #[cfg(feature = "mqtt")]
-pub use client::{init_rust_mqtt_client, EmbassyNetTransport, MqttClientConfig, RustMqttPublisher};
+pub use client::{EmbassyNetTransport, MqttClientConfig, RustMqttPublisher, init_rust_mqtt_client};

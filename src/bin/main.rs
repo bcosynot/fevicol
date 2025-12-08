@@ -18,7 +18,9 @@ use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
+#[cfg(feature = "mqtt")]
+use core::sync::atomic::Ordering;
 
 #[cfg(feature = "mqtt")]
 use embassy_net::{Config as NetConfig, Stack, StackResources};
@@ -44,9 +46,11 @@ extern crate alloc;
 // MQTT client abstractions moved to crate module (src/mqtt/client.rs)
 // ----------------------------------------------------------------------------
 
-use fevicol::mqtt::{MqQos, MqttPublish};
 #[cfg(feature = "mqtt")]
-use fevicol::mqtt::{init_rust_mqtt_client, interpret_connack_reason, EmbassyNetTransport, MqttClientConfig, RustMqttPublisher};
+use fevicol::mqtt::{
+    EmbassyNetTransport, MqttClientConfig, init_rust_mqtt_client, interpret_connack_reason,
+};
+use fevicol::mqtt::{LoggerPublisher, MqQos, MqttPublish};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -947,6 +951,7 @@ async fn main(spawner: Spawner) -> ! {
             Box::leak(Box::new(Channel::new()))
         });
     let sensor_sender = sensor_channel.sender();
+    #[cfg(feature = "mqtt")]
     let sensor_receiver = sensor_channel.receiver();
 
     if !ssid.is_empty() {
@@ -956,7 +961,18 @@ async fn main(spawner: Spawner) -> ! {
                 let radio_init: &'static _ = Box::leak(Box::new(radio_init));
 
                 let wifi_cfg = esp_radio::wifi::Config::default();
+                #[cfg(feature = "mqtt")]
                 let (wifi, ifaces) =
+                    match esp_radio::wifi::new(radio_init, peripherals.WIFI, wifi_cfg) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            error!("wifi new() failed: {:?}", e);
+                            panic!("wifi initialization failed");
+                        }
+                    };
+
+                #[cfg(not(feature = "mqtt"))]
+                let (wifi, _ifaces) =
                     match esp_radio::wifi::new(radio_init, peripherals.WIFI, wifi_cfg) {
                         Ok(v) => v,
                         Err(e) => {
