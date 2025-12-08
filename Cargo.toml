@@ -9,12 +9,10 @@ autobins     = false
 [features]
 default = []
 local_secrets = []
-# MQTT client selection (see .junie/plans/mqtt-tcp/plan.md)
+# MQTT client: rust-mqtt (MQTT v5) with embassy-net
 # By default we keep integration in placeholder/log-only mode.
-# Enable one of the following features to compile a concrete client path.
-mqtt_impl_rust_mqtt = ["dep:rust-mqtt"]      # Use rust-mqtt over smoltcp via embedded-io-async adapter
-mqtt_impl_embedded_mqttc = [] # Alternative client option (not enabled by default)
-mqtt_impl_mountain_mqtt = []  # Alternative client option (not enabled by default)
+# Enable the mqtt feature to compile with the MQTT client.
+mqtt = ["dep:rust-mqtt", "dep:embassy-net"]  # MQTT v5 support via rust-mqtt and embassy-net
 
 [[bin]]
 name = "fevicol"
@@ -36,10 +34,11 @@ esp-bootloader-esp-idf = { version = "0.4.0", features = ["defmt", "esp32c6"] }
 
 critical-section = "1.2.0"
 embedded-io = { version = "0.7.1", features = ["defmt"] }
-embedded-io-async = "0.7.0"
+embedded-io-async = "0.6.1"
 embassy-time = "0.5.0"
 embassy-sync = "0.7.2"
 embassy-executor = { version = "0.9.1", features = ["defmt"] }
+embassy-futures = "0.1.1"
 esp-alloc = { version = "0.9.0", features = ["defmt"] }
 esp-radio = { version = "0.17.0", features = [
   "defmt",
@@ -68,9 +67,14 @@ smoltcp = { version = "0.12.0", default-features = false, features = [
 ] }
 heapless = "0.8"
 static_cell = "2.1"
+# MQTT client implementations (optional, feature-gated)
 rust-mqtt = { version = "0.3", default-features = false, features = ["defmt"], optional = true }
-embedded-nal-async = "0.8"
+# Network stack for MQTT client
+embassy-net = { version = "0.7.1", features = ["tcp", "dhcpv4", "dns"], optional = true }
+# Note: embassy-net-driver 0.2.0 is already provided by esp-radio 0.17.0
 
+
+[dev-dependencies]
 
 [profile.dev]
 # Rust debug is too slow.
@@ -85,3 +89,4 @@ incremental      = false
 lto              = false  # Disabled: LTO strips esp-radio NVS symbols before linker script runs
 opt-level        = 's'
 overflow-checks  = false
+

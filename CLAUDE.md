@@ -8,7 +8,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The name is a nod to the classic Fevicol adhesive commercial where a woman hanging from a cliff says "pakde rehna, chhoddna nahin" (hold on, don't let go) - similar to how houseplants desperately cling to life when neglected.
 
-**Current Status**: Moisture sensing implemented and calibrated. The system can read soil moisture levels via ADC and convert them to meaningful percentages (0-100%). Wi-Fi connectivity is functional. Architecture refactored to separate Embassy tasks for fault isolation between sensor and network operations. MQTT client configuration infrastructure added with connection management task. Home Assistant MQTT Discovery protocol implemented with automatic sensor entity creation (JSON payloads ready for publishing). Still to implement: Full MQTT client TCP integration, actual publishing of discovery and sensor data, pump control.
+**Current Status**: 
+
+- Moisture sensing implemented and calibrated. The system can read soil moisture levels via ADC and convert them to meaningful percentages (0-100%). 
+- Wi-Fi connectivity is functional with automatic reconnection.
+- Architecture refactored to separate Embassy tasks for fault isolation between sensor and network operations. 
+- **MQTT v5 integration fully implemented** with rust-mqtt v0.3 and embassy-net: TCP connection with DNS resolution, authentication, Last Will Testament (LWT), Home Assistant MQTT Discovery protocol with automatic sensor entity creation, telemetry publishing (moisture % and raw ADC), exponential backoff reconnection (2s → 30s max), and connection health monitoring. 
+- Sensor readings are published every 5 seconds to Home Assistant. 
+- Still to implement: pump control with safety limits and automatic watering logic.
+
 
 ## Features
 
@@ -19,48 +27,176 @@ The name is a nod to the classic Fevicol adhesive commercial where a woman hangi
    - Real-time percentage conversion (0-100%)
    - Configurable threshold monitoring (currently 30%)
 2. **Wi-Fi Connectivity**: ✅ STA mode connection with auto-reconnect
-3. **Home Assistant Discovery**: ✅ MQTT Discovery protocol implementation
-   - Auto-discovery messages for moisture percentage sensor
-   - Auto-discovery for raw ADC value sensor (debugging)
+   - embassy-net stack with DHCP for automatic IP assignment
+   - DNS resolution for broker hostname with fallback to IP address
+   - Exponential backoff reconnection on Wi-Fi failures
+3. **MQTT v5 Integration**: ✅ Full MQTT v5 implementation with rust-mqtt v0.3
+   - MQTT v5 protocol with session expiry (3600s) and authentication
+   - Client ID format: `fevicol-{DEVICE_ID}`
+   - Crate-agnostic client interface: `MqQos` + `MqttPublish` trait
+   - TCP connection via `EmbassyNetTransport` adapter for `embassy_net::tcp::TcpSocket`
+   - Last Will Testament (LWT): `fevicol/{device_id}/status` = `offline` (retained)
+   - Availability publishing: `online` after connection (retained)
+   - Exponential backoff reconnection (2s → 30s max)
+   - Connection health monitoring with automatic reconnection
+   - Feature-gated with `mqtt` flag
+   - Default build uses `LoggerPublisher` (log-only mode) for testing without broker
+4. **Home Assistant MQTT Discovery**: ✅ Automatic sensor entity creation
+   - Discovery messages for moisture percentage sensor
+   - Discovery messages for raw ADC value sensor (debugging)
    - Device information with manufacturer, model, version
    - Availability topic support (online/offline status)
    - Discovery messages with retain flag for HA restart resilience
-   - Ready to publish when MQTT client is connected
-
-### In Progress
-4. **MQTT Infrastructure**: 🔧 Configuration, client abstraction, and discovery publishing ready
-   - MQTT 5.0 broker configuration (host, port, credentials)
-   - Client ID format: `fevicol-{DEVICE_ID}`
-   - New crate‑agnostic client interface: `MqQos` + `MqttPublish` trait
-   - `publish_discovery(&mut impl MqttPublish, device_id, sensor_id) -> Result` publishes retained availability + HA discovery with QoS 1
-   - Default build uses a `LoggerPublisher` (log‑only) until a concrete client feature is enabled
-   - Publish task waits for MQTT readiness before processing sensor readings
-   - Next: Implement TCP socket adapter for esp-radio's smoltcp stack and wire a concrete client
+   - Published on connect/reconnect with QoS 1
+   - 100ms pacing between discovery publishes
+5. **MQTT Telemetry Publishing**: ✅ Sensor readings published every 5 seconds
+   - Moisture percentage to `fevicol/{device_id}/{sensor_id}/moisture` (QoS 0)
+   - Raw ADC value to `fevicol/{device_id}/{sensor_id}/raw` (QoS 0)
+   - Inter-task communication via `embassy-sync::channel` (20-reading buffer)
+   - Sensor task continues operating during network outages
+   - Readings buffered during MQTT disconnection
 
 ### Planned
-5. **MQTT Publishing**: Publish sensor readings to broker (TCP integration required)
 6. **Automatic Watering**: Trigger water pump when moisture falls below threshold
 7. **Pump Control**: GPIO-based relay/MOSFET control with safety limits
 
-## MQTT Client Abstraction and Feature Flags (2025‑11‑30)
+## MQTT Client Implementation (rust-mqtt with MQTT v5)
 
-- Abstraction
-  - `src/bin/main.rs` defines a minimal MQTT publish interface to decouple the app from a specific client crate:
-    - `enum MqQos { AtMostOnce, AtLeastOnce }`
-    - `trait MqttPublish { async fn publish(&mut self, topic: &str, payload: &[u8], qos: MqQos, retain: bool) -> Result<(), Self::Err>; }`
-  - `publish_discovery` now accepts `&mut impl MqttPublish` and returns `Result`, publishing retained availability and Home Assistant discovery payloads with pacing.
+### Recommended Implementation: rust-mqtt
 
-- Default mode (log‑only)
-  - Without a concrete client feature, `LoggerPublisher` logs topics/payload lengths so discovery flow can be validated on RTT.
+The project uses **rust-mqtt v0.3** as the primary MQTT client, providing full MQTT v5 support with all required features including:
+- MQTT v5 protocol with session expiry, authentication, and enhanced error reporting
+- Last Will Testament (LWT) for availability tracking
+- Retain flag support for discovery messages
+- QoS 0 and QoS 1 support
+- Integration with `embassy-net` TCP stack
 
-- Feature flags (Cargo.toml)
-  - `mqtt_impl_rust_mqtt` — integrate `rust-mqtt` 0.3 over a smoltcp TCP adapter (preferred short‑term path)
-  - `mqtt_impl_embedded_mqttc` — alternative client option
-  - `mqtt_impl_mountain_mqtt` — alternative client option
-  - With none enabled (default), the build remains in log‑only mode and signals `MQTT_CONNECTED` after discovery logging.
+### MQTT Client Abstraction
 
-- LWT
-  - The connection task will configure Last Will Testament to publish `offline` retained to `fevicol/{device_id}/status` on unexpected disconnect when a concrete client is active. After connect, it publishes `online` retained and discovery configs.
+`src/bin/main.rs` defines a minimal MQTT publish interface to decouple the app from a specific client crate:
+- `enum MqQos { AtMostOnce, AtLeastOnce }`
+- `trait MqttPublish { async fn publish(&mut self, topic: &str, payload: &[u8], qos: MqQos, retain: bool) -> Result<(), Self::Err>; }`
+- `publish_discovery` accepts `&mut impl MqttPublish` and returns `Result`, publishing retained availability and Home Assistant discovery payloads with pacing.
+
+### Feature Flags
+
+**MQTT Implementation** (Cargo.toml `[features]`):
+- `mqtt` — rust-mqtt v0.3 with MQTT v5 support via embassy-net
+
+**Default Mode** (no feature enabled):
+- Uses `LoggerPublisher` for log-only mode
+- Validates discovery flow on RTT without requiring a broker
+- Signals `MQTT_CONNECTED` after discovery logging
+
+### Building with MQTT Support
+
+**Enable rust-mqtt client** (recommended):
+```bash
+cargo build --features mqtt
+cargo run --release --features mqtt
+```
+
+**Default build** (log-only mode):
+```bash
+cargo build
+cargo run --release
+```
+
+### MQTT v5 Configuration
+
+When `mqtt` is enabled:
+- **Protocol**: MQTT v5
+- **Client ID**: `fevicol-{DEVICE_ID}`
+- **Keep-alive**: 60 seconds
+- **Session expiry**: 3600 seconds (1 hour)
+- **Authentication**: Username/password support
+- **LWT Topic**: `fevicol/{device_id}/status`
+- **LWT Payload**: `offline` (retained, published on unexpected disconnect)
+- **Availability**: `online` published to status topic after successful connection (retained)
+- **Discovery**: Home Assistant MQTT Discovery messages published on connect/reconnect
+
+### Network Stack
+
+When `mqtt` is enabled, the project uses `embassy-net` for high-level network operations:
+- DHCP for automatic IP assignment
+- DNS resolution for broker hostname (with fallback to IP address)
+- TCP socket management via `embassy_net::tcp::TcpSocket`
+- Integration with esp-radio's Wi-Fi device driver
+
+### rust-mqtt v0.3 Implementation Details
+
+**Why rust-mqtt?**
+
+The project uses rust-mqtt v0.3 as the MQTT client because it provides complete MQTT v5 support with all required features. An earlier attempt with mqtt-async-embedded v1.0.0 was abandoned because that library was found to be incomplete (publish() method was a stub, no LWT support, no authentication, no retain flag support).
+
+**MQTT v5 Features Implemented**:
+- **Protocol Version**: MQTT v5 with full property support
+- **Session Management**: Session expiry interval (3600 seconds) for persistent sessions
+- **Authentication**: Username/password authentication support
+- **Last Will Testament (LWT)**: Configured to publish `offline` to availability topic on unexpected disconnect
+- **Retain Flag**: Discovery messages and availability status published with retain=true
+- **Quality of Service**: QoS 0 for telemetry (at most once), QoS 1 for discovery (at least once)
+- **Keep-Alive**: 60-second keep-alive interval with automatic PINGREQ/PINGRESP handling
+- **Clean Start**: Hardcoded to true in rust-mqtt v0.3.0 (no API to configure)
+
+**Transport Adapter**:
+
+The `EmbassyNetTransport` struct (src/bin/main.rs) adapts `embassy_net::tcp::TcpSocket` for use with rust-mqtt:
+```rust
+struct EmbassyNetTransport<'a> {
+    socket: embassy_net::tcp::TcpSocket<'a>,
+}
+```
+
+Implements:
+- `embedded_io_async::ErrorType` - Error type definition
+- `embedded_io_async::Read` - Async read from TCP socket
+- `embedded_io_async::Write` - Async write to TCP socket with flush support
+
+**Client Initialization** (init_rust_mqtt_client function):
+1. Create `EmbassyNetTransport` wrapping a connected TCP socket
+2. Allocate receive buffer (2048 bytes) and write buffer (2048 bytes)
+3. Configure MQTT client with:
+   - Client ID: `fevicol-{DEVICE_ID}`
+   - Keep-alive: 60 seconds
+   - Session expiry: 3600 seconds (MQTT v5 property)
+   - Username/password authentication
+   - LWT topic, payload, and retain flag
+4. Call `MqttClient::connect()` to perform MQTT CONNECT handshake
+5. Parse CONNACK response and check reason code
+6. Return `RustMqttPublisher` wrapper implementing `MqttPublish` trait
+
+**Connection Lifecycle** (mqtt_connection_task):
+1. Wait for network stack to be ready (DHCP assigned IP)
+2. Perform DNS resolution for broker hostname (with exponential backoff and IP fallback)
+3. Establish TCP connection via `embassy_net::tcp::TcpSocket`
+4. Initialize rust-mqtt client with `init_rust_mqtt_client()`
+5. Publish availability as `online` (retained)
+6. Publish Home Assistant discovery messages with 100ms pacing
+7. Send sensor readings from channel to broker
+8. On connection loss: exponential backoff (2s → 30s max) and reconnect
+9. Re-publish discovery on reconnection
+
+**Error Handling**:
+- DNS resolution failures: exponential backoff, fallback to IP address after repeated failures
+- TCP connection failures: exponential backoff (2s, 4s, 8s, 16s, 30s max)
+- MQTT CONNACK errors: logged with reason code interpretation (bad credentials, server unavailable, etc.)
+- Publish failures: trigger reconnection (rust-mqtt v0.3 doesn't expose PUBACK reason codes)
+- Keep-alive timeout: rust-mqtt handles internally, failures trigger reconnection
+- All errors logged via defmt without panicking
+
+**Limitations of rust-mqtt v0.3.0**:
+- Clean start is hardcoded to true (no API to set to false for session persistence)
+- LWT QoS is not configurable (uses default)
+- PUBACK reason codes not exposed to application
+- Server DISCONNECT packets not exposed (detected via operation failures)
+
+**Buffer Sizing**:
+- TCP RX buffer: 4096 bytes (embassy_net::tcp::TcpSocket)
+- TCP TX buffer: 4096 bytes (embassy_net::tcp::TcpSocket)
+- MQTT receive buffer: 2048 bytes (for incoming packets)
+- MQTT write buffer: 2048 bytes (for outgoing packets)
+- Channel capacity: 20 sensor readings (buffers ~100 seconds during outages)
 
 ## Technical Foundation
 
@@ -359,7 +495,7 @@ A calibration routine is preserved as commented code at the end of `src/bin/main
 3. Publish raw ADC sensor discovery (retain=true)
 4. Small delays (100ms) between publishes to avoid overwhelming broker
 
-**Current Status**: Discovery message generation is fully implemented. Actual publishing awaits MQTT client TCP integration (next step).
+**Current Status**: Discovery message generation and publishing are fully implemented with rust-mqtt v0.3 and embassy-net.
 
 ### Topic Structure
 
@@ -404,7 +540,7 @@ State topics:
 Status topic:
 - `fevicol/fevicol-01/status`
 
-### MQTT Configuration (Infrastructure Added)
+### MQTT Configuration and Architecture (Fully Implemented)
 
 **Configuration Constants** (src/bin/main.rs):
 - `MQTT_BROKER_HOST`: Broker IP or hostname (default: "192.168.1.100") - configure for your network
@@ -414,41 +550,33 @@ Status topic:
 - `MQTT_USERNAME` / `MQTT_PASSWORD`: Authentication credentials (empty strings for no auth)
 
 **Task Architecture**:
-- `mqtt_connection_task`: Waits for network, logs configuration, publishes Home Assistant discovery messages (placeholder), signals readiness
-- `mqtt_publish_task`: Waits for MQTT readiness, receives sensor readings from channel, ready to publish
-- `publish_discovery()`: Async function that generates and publishes discovery messages for all sensors
+- `embassy_net_task`: Runs embassy-net stack runner for packet processing (TCP, DHCP, DNS)
+- `network_task`: Manages Wi-Fi connection in STA mode with automatic reconnection, coordinates with embassy-net stack
+- `mqtt_connection_task`: Manages MQTT broker connection lifecycle with rust-mqtt v5 client, DNS resolution, TCP connection via `EmbassyNetTransport`, exponential backoff reconnection, publishes discovery and availability messages
+- `mqtt_publish_task`: Receives sensor readings from channel and publishes telemetry to MQTT broker
+- `moisture_sensor_task`: Reads ADC every 5 seconds, converts to percentage, sends readings to channel (independent of network status)
+- `publish_discovery()`: Async function that generates and publishes discovery messages for all sensors with QoS 1 and retain flag
+
+**Transport Layer**:
+- `EmbassyNetTransport`: Adapter wrapping `embassy_net::tcp::TcpSocket` for rust-mqtt client
+- Implements `embedded_io_async::Read` and `embedded_io_async::Write` traits
+- Handles TCP connection establishment and error mapping
 
 **Discovery Integration**:
-- Discovery messages are published after successful MQTT connection (before signaling readiness)
+- Discovery messages are published after successful MQTT connection with 100ms pacing
 - Discovery is re-published on reconnection to handle Home Assistant restarts
-- Discovery function logs what would be published (actual publishing awaits TCP integration)
+- Availability status (`online`/`offline`) published with retain flag
 
-**Status**: Configuration infrastructure and Home Assistant discovery protocol complete. Next step is implementing TCP socket adapter for esp-radio's smoltcp stack to connect rust-mqtt client.
+**Error Handling and Resilience**:
+- DNS resolution with exponential backoff and fallback to IP address
+- TCP connection with exponential backoff (2s → 30s max)
+- Automatic reconnection on connection loss
+- Sensor readings buffered in channel (20-reading capacity) during network outages
+- All errors logged without panicking
 
 ### Next Implementation Steps
 
-**MQTT TCP Integration** (Next Priority):
-- Implement embedded-io adapter for esp-radio's smoltcp TCP socket
-- Integrate rust-mqtt client with adapted socket
-- Implement actual broker connection with MQTT 5.0 protocol
-- Set Last Will Testament (LWT) to publish availability as `offline` on disconnect
-- Add exponential backoff reconnection (2s → 30s max)
-- Implement PINGREQ for connection health monitoring
-
-**MQTT Publishing** (After TCP Integration):
-- Publish Home Assistant discovery messages on connection:
-  - `homeassistant/sensor/{device_id}/moisture/config` (retain=true)
-  - `homeassistant/sensor/{device_id}/raw/config` (retain=true)
-  - `fevicol/{device_id}/status` = `online` (retain=true)
-- Publish sensor readings:
-  - `fevicol/{device_id}/{sensor_id}/moisture` - moisture percentage
-  - `fevicol/{device_id}/{sensor_id}/raw` - raw ADC value
-- Re-publish discovery on reconnection (HA might have restarted)
-- Subscribe topics (future):
-  - `fevicol/{device_id}/pump/command` - manual pump control
-  - `fevicol/{device_id}/config/threshold` - adjust moisture threshold
-
-**Pump Control** (Not Yet Implemented):
+**Pump Control** (Next Priority):
 - Use GPIO output to control relay or MOSFET for pump power
 - Safety features needed:
   - Maximum run time (e.g., 30 seconds per activation)
