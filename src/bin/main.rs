@@ -268,7 +268,8 @@ pub async fn init_rust_mqtt_client<'a>(
 
     let rng = CountingRng(0);
 
-    let mut client_config = ClientConfig::new(rust_mqtt::client::client_config::MqttVersion::MQTTv5, rng);
+    let mut client_config =
+        ClientConfig::new(rust_mqtt::client::client_config::MqttVersion::MQTTv5, rng);
 
     client_config.add_client_id(config.client_id);
     client_config.keep_alive = config.keep_alive_secs;
