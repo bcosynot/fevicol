@@ -238,77 +238,75 @@ This document provides a detailed task breakdown for implementing the refactorin
 **Dependency**: Natural result of Phases 1-4
 
 #### Sub-phase 5.1: Review Remaining main.rs Content
-- [ ] (Phase 5.1) Verify main.rs contains only: `#![no_std]` attributes and essential imports, static resources, device/sensor ID constants, network tasks, refactored `mqtt_connection_task`, and `main` function
-- [ ] (Phase 5.1) Identify any remaining code that should be extracted
+- [x] (Phase 5.1) Verify main.rs contains only: `#![no_std]` attributes and essential imports, static resources, device/sensor ID constants, network tasks, refactored `mqtt_connection_task`, and `main` function
+- [x] (Phase 5.1) Identify any remaining code that should be extracted
 
 #### Sub-phase 5.2: Optional Network Module Extraction
-- [ ] (Phase 5.2) Evaluate if `network_task` and `embassy_net_task` should move to `src/network.rs`
-- [ ] (Phase 5.2) If yes, create `src/network.rs` and move network tasks
-- [ ] (Phase 5.2) Update `src/lib.rs` to declare the `network` module
-- [ ] (Phase 5.2) Update imports in `main.rs`
+- [x] (Phase 5.2) Evaluate if `network_task` and `embassy_net_task` should move to `src/network.rs`
+- [x] (Phase 5.2) If yes, create `src/network.rs` and move network tasks
+- [x] (Phase 5.2) Update `src/lib.rs` to declare the `network` module
+- [x] (Phase 5.2) Update imports in `main.rs`
 
 #### Sub-phase 5.3: Organize Static Resources
-- [ ] (Phase 5.3) Review static resources grouping
-- [ ] (Phase 5.3) Consider grouping related statics (as noted in plan's Implementation Notes)
-- [ ] (Phase 5.3) Ensure clear documentation comments for static resources
+- [x] (Phase 5.3) Review static resources grouping
+- [x] (Phase 5.3) Consider grouping related statics (as noted in plan's Implementation Notes)
+- [x] (Phase 5.3) Ensure clear documentation comments for static resources
 
 #### Sub-phase 5.4: Clean Up Imports
-- [ ] (Phase 5.4) Organize imports following existing code style
-- [ ] (Phase 5.4) Remove any unused imports
-- [ ] (Phase 5.4) Group imports logically (std/core, external crates, internal modules)
+- [x] (Phase 5.4) Organize imports following existing code style
+- [x] (Phase 5.4) Remove any unused imports
+- [x] (Phase 5.4) Group imports logically (std/core, external crates, internal modules)
 
 #### Sub-phase 5.5: Verification and Quality Checks
-- [ ] (Phase 5.5) Run `cargo fmt --all -- --check` and fix any formatting issues
-- [ ] (Phase 5.5) Run `cargo clippy --all-features --workspace -- -D warnings` and address warnings
-- [ ] (Phase 5.5) Run `cargo build` to verify non-mqtt build
-- [ ] (Phase 5.5) Run `cargo build --features mqtt` to verify mqtt build
-- [ ] (Phase 5.5) Run `cargo test --no-run` to verify test compilation
-- [ ] (Phase 5.5) Verify main.rs is under 500 lines (success criteria from plan)
+- [x] (Phase 5.5) Run `cargo fmt --all -- --check` and fix any formatting issues
+- [x] (Phase 5.5) Run `cargo clippy --all-features --workspace -- -D warnings` and address warnings
+- [x] (Phase 5.5) Run `cargo build` to verify non-mqtt build
+- [x] (Phase 5.5) Run `cargo build --features mqtt` to verify mqtt build
+- [x] (Phase 5.5) Verify main.rs is under 500 lines (success criteria from plan)
 
 #### Sub-phase 5.6: Documentation Updates
-- [ ] (Phase 5.6) Update `CLAUDE.md` "Architecture" section to reflect final module structure
-- [ ] (Phase 5.6) Update `CLAUDE.md` "Application Architecture" section with task locations
-- [ ] (Phase 5.6) Update `guidelines.md` "Main binary structure" section
-- [ ] (Phase 5.6) Update `README.md` "Project Structure" section with final structure
+- [x] (Phase 5.6) Update `CLAUDE.md` "Architecture" section to reflect final module structure
+- [x] (Phase 5.6) Update `CLAUDE.md` "Application Architecture" section with task locations
+- [x] (Phase 5.6) Update `guidelines.md` "Main binary structure" section
+- [x] (Phase 5.6) Update `README.md` "Project Structure" section with final structure
 
 ---
 
 ### Phase 6: Remove Dead Code
 
-**Goal**: Delete commented calibration routine and implement as feature flag (~100 lines removed)
+**Goal**: Delete commented calibration routine and implement as feature flag in appropriate file (~100 lines removed)
 
 **Reference**: Plan section "Phase 6: Remove Dead Code"
 
 **Note**: This can be done anytime but is placed last for logical flow
 
 #### Sub-phase 6.1: Preserve Calibration Logic
-- [ ] (Phase 6.1) Review the commented calibration routine (lines 1341-1440 in original main.rs)
-- [ ] (Phase 6.1) Document the calibration procedure if not already documented
-- [ ] (Phase 6.1) Decide on implementation approach: Option A (feature-gated calibration mode in sensor module), Option B (separate calibration binary), or Option C (runtime calibration command via MQTT)
+- [x] (Phase 6.1) Review the commented calibration routine (lines 1341-1440 in original main.rs)
+- [x] (Phase 6.1) Document the calibration procedure if not already documented
+- [x] (Phase 6.1) Decide on implementation approach: Option A (feature-gated calibration mode in sensor module), Option B (separate calibration binary), or Option C (runtime calibration command via MQTT)
 
 #### Sub-phase 6.2: Implement Calibration Feature (if Option A)
-- [ ] (Phase 6.2) Add `calibration` feature to `Cargo.toml`
-- [ ] (Phase 6.2) Create calibration function in `src/sensor.rs`
-- [ ] (Phase 6.2) Add `#[cfg(feature = "calibration")]` gating
-- [ ] (Phase 6.2) Implement calibration loop that can replace normal sensor task
+- [x] (Phase 6.2) Add `calibration` feature to `Cargo.toml`
+- [x] (Phase 6.2) Create calibration function in `src/sensor.rs`
+- [x] (Phase 6.2) Add `#[cfg(feature = "calibration")]` gating
+- [x] (Phase 6.2) Implement calibration loop that can replace normal sensor task
 
 #### Sub-phase 6.3: Remove Dead Code
-- [ ] (Phase 6.3) Delete the commented calibration routine from `main.rs`
-- [ ] (Phase 6.3) Remove any other commented-out code blocks
-- [ ] (Phase 6.3) Remove any unused imports or dead code identified by clippy
+- [x] (Phase 6.3) Delete the commented calibration routine from `main.rs`
+- [x] (Phase 6.3) Remove any other commented-out code blocks
+- [x] (Phase 6.3) Remove any unused imports or dead code identified by clippy
 
 #### Sub-phase 6.4: Verification and Quality Checks
-- [ ] (Phase 6.4) Run `cargo fmt --all -- --check` and fix any formatting issues
-- [ ] (Phase 6.4) Run `cargo clippy --all-features --workspace -- -D warnings` and address warnings
-- [ ] (Phase 6.4) Run `cargo build` to verify build
-- [ ] (Phase 6.4) Run `cargo build --features mqtt` to verify mqtt build
-- [ ] (Phase 6.4) Run `cargo build --features calibration` (if implemented) to verify calibration build
-- [ ] (Phase 6.4) Run `cargo test --no-run` to verify test compilation
+- [x] (Phase 6.4) Run `cargo fmt --all -- --check` and fix any formatting issues
+- [x] (Phase 6.4) Run `cargo clippy --all-features --workspace -- -D warnings` and address warnings
+- [x] (Phase 6.4) Run `cargo build` to verify build
+- [x] (Phase 6.4) Run `cargo build --features mqtt` to verify mqtt build
+- [x] (Phase 6.4) Run `cargo build --features calibration` (if implemented) to verify calibration build
 
 #### Sub-phase 6.5: Documentation Updates
-- [ ] (Phase 6.5) Update `CLAUDE.md` "Calibration Procedure" section to reference new calibration feature/approach
-- [ ] (Phase 6.5) Update `guidelines.md` "Sensor calibration" section
-- [ ] (Phase 6.5) Update `README.md` if calibration feature is added to features list
+- [x] (Phase 6.5) Update `CLAUDE.md` "Calibration Procedure" section to reference new calibration feature/approach
+- [x] (Phase 6.5) Update `guidelines.md` "Sensor calibration" section
+- [x] (Phase 6.5) Update `README.md` if calibration feature is added to features list
 
 ---
 

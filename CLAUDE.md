@@ -436,9 +436,6 @@ This allows testing firmware in simulation before deploying to hardware.
 - Run calibration routine (commented at end of main.rs) to recalibrate for different sensors
 
 **Conversion Function** (src/sensor.rs):
-```rust
-pub fn raw_to_moisture_percent(raw: u16) -> u8
-```
 - Linear interpolation between calibration points
 - Returns 0-100% moisture level
 - Handles out-of-range values (clamps to 0% or 100%)
@@ -453,15 +450,22 @@ pub fn raw_to_moisture_percent(raw: u16) -> u8
 
 ### Calibration Procedure
 
-A calibration routine is preserved as commented code at the end of `src/bin/main.rs`. To recalibrate:
+A calibration feature is available via the `calibration` feature flag in `src/sensor.rs`. To recalibrate:
 
-1. Replace the main loop with the calibration code
-2. Flash to device: `cargo run`
+1. Build with calibration feature: `cargo build --features calibration`
+2. Flash to device: `cargo run --features calibration`
 3. Follow RTT prompts:
    - Keep sensor in air for 10 dry readings
    - Submerge sensor in water for 10 wet readings
 4. Update `SENSOR_DRY` and `SENSOR_WET` constants in `src/sensor.rs` with the averages
-5. Restore the monitoring loop
+5. Rebuild without calibration feature for normal operation
+
+**Calibration Task** (`calibration_task` in src/sensor.rs):
+- Feature-gated with `#[cfg(feature = "calibration")]`
+- Collects 10 dry readings (sensor in air) with 10-second preparation time
+- Collects 10 wet readings (sensor in water) with 15-second preparation time
+- Calculates and displays averaged calibration values
+- Outputs formatted constants ready to copy into `src/sensor.rs`
 
 ### Home Assistant MQTT Discovery (Implemented)
 

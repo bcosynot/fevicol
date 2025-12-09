@@ -563,27 +563,15 @@ async fn mqtt_connection_task(
     NETWORK_READY.wait().await;
     info!("mqtt: network ready");
 
-    let (mqtt_username, mqtt_password) = {
-        #[cfg(feature = "local_secrets")]
-        {
-            (LOCAL_MQTT_USERNAME, LOCAL_MQTT_PASSWORD)
-        }
-        #[cfg(not(feature = "local_secrets"))]
-        {
-            ("", "")
-        }
-    };
+    #[cfg(feature = "local_secrets")]
+    let (mqtt_username, mqtt_password) = (LOCAL_MQTT_USERNAME, LOCAL_MQTT_PASSWORD);
+    #[cfg(not(feature = "local_secrets"))]
+    let (mqtt_username, mqtt_password) = ("", "");
 
-    let (mqtt_broker_host, mqtt_broker_port) = {
-        #[cfg(feature = "local_secrets")]
-        {
-            (LOCAL_MQTT_BROKER_HOST, LOCAL_MQTT_BROKER_PORT)
-        }
-        #[cfg(not(feature = "local_secrets"))]
-        {
-            ("192.168.0.245", 1883u16) // Default fallback values
-        }
-    };
+    #[cfg(feature = "local_secrets")]
+    let (mqtt_broker_host, mqtt_broker_port) = (LOCAL_MQTT_BROKER_HOST, LOCAL_MQTT_BROKER_PORT);
+    #[cfg(not(feature = "local_secrets"))]
+    let (mqtt_broker_host, mqtt_broker_port) = ("192.168.0.245", 1883u16); // Default fallback values
 
     info!(
         "mqtt: broker configured - {}:{}",
@@ -855,19 +843,13 @@ async fn main(spawner: Spawner) -> ! {
     //   and build with `--features local_secrets`.
     // - Fallback: compile-time env vars `WIFI_SSID` / `WIFI_PASS`.
 
-    let (ssid, pass) = {
-        #[cfg(feature = "local_secrets")]
-        {
-            (LOCAL_SSID, LOCAL_PASS)
-        }
-        #[cfg(not(feature = "local_secrets"))]
-        {
-            (
-                option_env!("WIFI_SSID").unwrap_or(""),
-                option_env!("WIFI_PASS").unwrap_or(""),
-            )
-        }
-    };
+    #[cfg(feature = "local_secrets")]
+    let (ssid, pass) = (LOCAL_SSID, LOCAL_PASS);
+    #[cfg(not(feature = "local_secrets"))]
+    let (ssid, pass) = (
+        option_env!("WIFI_SSID").unwrap_or(""),
+        option_env!("WIFI_PASS").unwrap_or(""),
+    );
 
     // Initialize sensor reading channel for inter-task communication
     // Must be done before wifi block so both wifi and non-wifi paths can use it
@@ -1012,104 +994,3 @@ async fn main(spawner: Spawner) -> ! {
         Timer::after(Duration::from_secs(3600)).await;
     }
 }
-
-/*
-// ============================================================================
-// CALIBRATION ROUTINE - Replace main loop above with this code to recalibrate
-// ============================================================================
-
-    info!("application: all tasks spawned");
-
-    // ===== CALIBRATION ROUTINE =====
-    info!("=== MOISTURE SENSOR CALIBRATION ===");
-    info!("This will collect dry and wet readings for calibration");
-
-    // Wait a bit for the message to be seen
-    Timer::after(Duration::from_secs(2)).await;
-
-    // ===== DRY READINGS =====
-    info!("");
-    info!("STEP 1: DRY SENSOR READINGS");
-    info!("Keep the sensor in AIR (completely dry)");
-    info!("Starting in 10 seconds...");
-    Timer::after(Duration::from_secs(10)).await;
-
-    info!("Collecting 10 dry readings...");
-    let mut dry_readings = [0u16; 10];
-
-    for i in 0..10 {
-        match adc1.read_oneshot(&mut a0) {
-            Ok(raw) => {
-                dry_readings[i] = raw;
-                info!("  Dry reading {}: {}", i + 1, raw);
-            }
-            Err(_) => {
-                error!("  ADC read {} failed, using 0", i + 1);
-                dry_readings[i] = 0;
-            }
-        }
-        Timer::after(Duration::from_millis(500)).await;
-    }
-
-    // Calculate dry average
-    let dry_sum: u32 = dry_readings.iter().map(|&x| x as u32).sum();
-    let dry_avg = dry_sum / 10;
-
-    info!("");
-    info!("DRY READINGS COMPLETE:");
-    info!("  Raw values: {:?}", dry_readings);
-    info!("  Average: {}", dry_avg);
-
-    // ===== WET READINGS =====
-    Timer::after(Duration::from_secs(3)).await;
-
-    info!("");
-    info!("STEP 2: WET SENSOR READINGS");
-    info!("Place the sensor in WATER (fully submerged sensing area)");
-    info!("Starting in 15 seconds...");
-    Timer::after(Duration::from_secs(15)).await;
-
-    info!("Collecting 10 wet readings...");
-    let mut wet_readings = [0u16; 10];
-
-    for i in 0..10 {
-        match adc1.read_oneshot(&mut a0) {
-            Ok(raw) => {
-                wet_readings[i] = raw;
-                info!("  Wet reading {}: {}", i + 1, raw);
-            }
-            Err(_) => {
-                error!("  ADC read {} failed, using 0", i + 1);
-                wet_readings[i] = 0;
-            }
-        }
-        Timer::after(Duration::from_millis(500)).await;
-    }
-
-    // Calculate wet average
-    let wet_sum: u32 = wet_readings.iter().map(|&x| x as u32).sum();
-    let wet_avg = wet_sum / 10;
-
-    info!("");
-    info!("WET READINGS COMPLETE:");
-    info!("  Raw values: {:?}", wet_readings);
-    info!("  Average: {}", wet_avg);
-
-    // ===== CALIBRATION SUMMARY =====
-    info!("");
-    info!("=== CALIBRATION SUMMARY ===");
-    info!("DRY (air):   {} (individual: {:?})", dry_avg, dry_readings);
-    info!("WET (water): {} (individual: {:?})", wet_avg, wet_readings);
-    info!("");
-    info!("Copy these values for calibration configuration:");
-    info!("  const SENSOR_DRY: u16 = {};", dry_avg);
-    info!("  const SENSOR_WET: u16 = {};", wet_avg);
-    info!("");
-    info!("Calibration complete! The device will now halt.");
-
-    // Halt - calibration complete
-    loop {
-        Timer::after(Duration::from_secs(60)).await;
-    }
-}
-*/

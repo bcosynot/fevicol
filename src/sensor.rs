@@ -94,3 +94,106 @@ pub async fn moisture_sensor_task(
         Timer::after(Duration::from_secs(5)).await;
     }
 }
+
+/// Calibration task: collects dry and wet ADC readings for sensor calibration
+///
+/// This task replaces the normal sensor task when the `calibration` feature is enabled.
+/// It guides the user through collecting 10 dry readings (sensor in air) and 10 wet
+/// readings (sensor in water), then outputs the averaged values to be used as
+/// SENSOR_DRY and SENSOR_WET constants.
+///
+/// To use: build with --features calibration and follow the on-screen prompts.
+#[cfg(feature = "calibration")]
+#[task]
+pub async fn calibration_task(mut adc: MoistureAdc, mut pin: MoistureAdcPin) -> ! {
+    info!("=== MOISTURE SENSOR CALIBRATION ===");
+    info!("This will collect dry and wet readings for calibration");
+
+    // Wait a bit for the message to be seen
+    Timer::after(Duration::from_secs(2)).await;
+
+    // ===== DRY READINGS =====
+    info!("");
+    info!("STEP 1: DRY SENSOR READINGS");
+    info!("Keep the sensor in AIR (completely dry)");
+    info!("Starting in 10 seconds...");
+    Timer::after(Duration::from_secs(10)).await;
+
+    info!("Collecting 10 dry readings...");
+    let mut dry_readings = [0u16; 10];
+
+    for (i, reading) in dry_readings.iter_mut().enumerate() {
+        match adc.read_oneshot(&mut pin) {
+            Ok(raw) => {
+                *reading = raw;
+                info!("  Dry reading {}: {}", i + 1, raw);
+            }
+            Err(_) => {
+                error!("  ADC read {} failed, using 0", i + 1);
+                *reading = 0;
+            }
+        }
+        Timer::after(Duration::from_millis(500)).await;
+    }
+
+    // Calculate dry average
+    let dry_sum: u32 = dry_readings.iter().map(|&x| x as u32).sum();
+    let dry_avg = dry_sum / 10;
+
+    info!("");
+    info!("DRY READINGS COMPLETE:");
+    info!("  Raw values: {:?}", dry_readings);
+    info!("  Average: {}", dry_avg);
+
+    // ===== WET READINGS =====
+    Timer::after(Duration::from_secs(3)).await;
+
+    info!("");
+    info!("STEP 2: WET SENSOR READINGS");
+    info!("Place the sensor in WATER (fully submerged sensing area)");
+    info!("Starting in 15 seconds...");
+    Timer::after(Duration::from_secs(15)).await;
+
+    info!("Collecting 10 wet readings...");
+    let mut wet_readings = [0u16; 10];
+
+    for (i, reading) in wet_readings.iter_mut().enumerate() {
+        match adc.read_oneshot(&mut pin) {
+            Ok(raw) => {
+                *reading = raw;
+                info!("  Wet reading {}: {}", i + 1, raw);
+            }
+            Err(_) => {
+                error!("  ADC read {} failed, using 0", i + 1);
+                *reading = 0;
+            }
+        }
+        Timer::after(Duration::from_millis(500)).await;
+    }
+
+    // Calculate wet average
+    let wet_sum: u32 = wet_readings.iter().map(|&x| x as u32).sum();
+    let wet_avg = wet_sum / 10;
+
+    info!("");
+    info!("WET READINGS COMPLETE:");
+    info!("  Raw values: {:?}", wet_readings);
+    info!("  Average: {}", wet_avg);
+
+    // ===== CALIBRATION SUMMARY =====
+    info!("");
+    info!("=== CALIBRATION SUMMARY ===");
+    info!("DRY (air):   {} (individual: {:?})", dry_avg, dry_readings);
+    info!("WET (water): {} (individual: {:?})", wet_avg, wet_readings);
+    info!("");
+    info!("Copy these values for calibration configuration:");
+    info!("  pub const SENSOR_DRY: u16 = {};", dry_avg);
+    info!("  pub const SENSOR_WET: u16 = {};", wet_avg);
+    info!("");
+    info!("Calibration complete! Update src/sensor.rs with these values.");
+
+    // Halt - calibration complete
+    loop {
+        Timer::after(Duration::from_secs(60)).await;
+    }
+}

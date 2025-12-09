@@ -193,8 +193,40 @@
     - Verify Home Assistant MQTT integration is enabled
     - Ensure discovery prefix is `homeassistant` (default in HA)
 
+### Sensor Calibration
 
- ## Tests
+**Feature Flag**:
+- `calibration` — Enables sensor calibration mode for recalibrating the moisture sensor
+
+**Running Calibration**:
+```bash
+# Build and run calibration mode
+cargo run --features calibration
+
+# Or with local secrets
+cargo run --features calibration,local_secrets
+```
+
+**Calibration Procedure**:
+1. Build and flash with `calibration` feature enabled
+2. Follow RTT prompts:
+   - Keep sensor in air for 10 dry readings (10-second preparation time)
+   - Place sensor in water for 10 wet readings (15-second preparation time)
+3. Copy the averaged calibration values from RTT output
+4. Update `SENSOR_DRY` and `SENSOR_WET` constants in `src/sensor.rs`
+5. Rebuild without `calibration` feature for normal operation
+
+**What It Does**:
+- Collects 10 ADC readings for dry conditions (sensor in air)
+- Collects 10 ADC readings for wet conditions (sensor in water)
+- Calculates and displays averaged values
+- Outputs formatted constants ready to copy into `src/sensor.rs`
+- Halts after calibration is complete
+
+**Note**: Calibration is only needed when setting up a new sensor or if readings seem inaccurate.
+
+
+## Tests
  This project uses `embedded-test` with the Embassy executor and an external scheduler hosted by `esp-rtos`.
  
  - On device (recommended): `cargo test`
