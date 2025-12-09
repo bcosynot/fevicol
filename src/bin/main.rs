@@ -65,8 +65,7 @@ use heapless::String;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 // Device and sensor identifiers for MQTT topic namespacing
-// TODO: Consider generating DEVICE_ID from MAC address suffix for uniqueness
-const DEVICE_ID: &str = "fevicol-01";
+// DEVICE_ID is generated from MAC address at runtime for per-device uniqueness
 const SENSOR_ID: &str = "moisture-1";
 
 // MQTT Configuration
@@ -124,6 +123,55 @@ enum MqttSessionError {
     DiscoveryPublishFailed,
     /// Publishing telemetry failed (moisture or raw reading)
     TelemetryPublishFailed,
+}
+
+// ----------------------------------------------------------------------------
+// Device ID Generation
+// ----------------------------------------------------------------------------
+
+/// Panic on device ID generation failure
+///
+/// Panics immediately to prevent device ID conflicts.
+/// The fallback "fevicol-000000" would cause conflicts between multiple devices.
+///
+/// **Note**: This should never happen - heapless::String<16> has sufficient capacity
+/// for "fevicol-XXXXXX" (13 chars), and formatting 6 hex digits is infallible.
+fn panic_device_id_failed() -> ! {
+    panic!("FATAL: Device ID generation failed - this should never happen!");
+}
+
+/// Generate a unique device ID from the ESP32-C6's MAC address
+///
+/// Uses the last 3 bytes of the base MAC address to create a device ID
+/// in the format "fevicol-XXXXXX" where XXXXXX is the hex representation
+/// of the last 3 MAC bytes.
+///
+/// **Example**: MAC `AA:BB:CC:DD:EE:FF` → device ID `fevicol-ddeeff`
+///
+/// **Returns**: Formatted device ID string (max 16 characters)
+///
+/// **Panics**: If formatting fails, panics immediately to prevent device ID conflicts.
+/// A fallback ID like "fevicol-000000" would cause conflicts between multiple devices.
+fn generate_device_id() -> heapless::String<16> {
+    use core::fmt::Write;
+
+    let mac = esp_hal::efuse::Efuse::read_base_mac_address();
+    let mut device_id = heapless::String::<16>::new();
+
+    // Use last 3 bytes of MAC for uniqueness (6 hex chars)
+    // If formatting fails, panic immediately to prevent conflicts
+    if write!(
+        &mut device_id,
+        "fevicol-{:02x}{:02x}{:02x}",
+        mac[3], mac[4], mac[5]
+    )
+    .is_err()
+    {
+        error!("FATAL: Device ID formatting failed - this should never happen!");
+        panic_device_id_failed();
+    }
+
+    device_id
 }
 
 // ----------------------------------------------------------------------------
@@ -311,6 +359,7 @@ async fn establish_tcp_connection<'a>(
 /// - Signals `MQTT_CONNECTED` to notify other tasks (set to false on error)
 #[cfg(feature = "mqtt")]
 async fn connect_mqtt_client<'a>(
+    device_id: &'a str,
     tcp_socket: embassy_net::tcp::TcpSocket<'a>,
     mqtt_username: &'a str,
     mqtt_password: &'a str,
@@ -323,7 +372,7 @@ async fn connect_mqtt_client<'a>(
     let lwt_payload = b"offline";
 
     let mqtt_config = MqttClientConfig {
-        client_id: DEVICE_ID,
+        client_id: device_id,
         keep_alive_secs: MQTT_KEEP_ALIVE_SECS,
         session_expiry_secs: MQTT_SESSION_EXPIRY_SECS,
         username: mqtt_username,
@@ -359,8 +408,8 @@ async fn connect_mqtt_client<'a>(
                     }
                     rust_mqtt::packet::v5::reason_codes::ReasonCode::ClientIdNotValid => {
                         error!(
-                            "mqtt: Invalid client ID '{}' - check DEVICE_ID configuration",
-                            DEVICE_ID
+                            "mqtt: Invalid client ID '{}' - check device_id configuration",
+                            device_id
                         );
                     }
                     _ => {}
@@ -374,7 +423,7 @@ async fn connect_mqtt_client<'a>(
 
     // Stage 6: Publish availability status (online)
     info!("mqtt: publishing availability status (online)...");
-    let availability_topic = build_availability_topic(DEVICE_ID);
+    let availability_topic = build_availability_topic(device_id);
     client
         .publish(
             availability_topic.as_str(),
@@ -392,7 +441,7 @@ async fn connect_mqtt_client<'a>(
 
     // Stage 7: Publish Home Assistant discovery messages
     info!("mqtt: publishing discovery messages...");
-    publish_discovery(&mut client, DEVICE_ID, SENSOR_ID)
+    publish_discovery(&mut client, device_id, SENSOR_ID)
         .await
         .map_err(|e| {
             error!("mqtt: discovery publish failed: {:?}", e);
@@ -433,6 +482,7 @@ async fn connect_mqtt_client<'a>(
 /// - On timeout: continues (keepalive handled by rust-mqtt internally)
 #[cfg(feature = "mqtt")]
 async fn run_telemetry_loop(
+    device_id: &str,
     client: &mut fevicol::mqtt::RustMqttPublisher<'_, EmbassyNetTransport<'_>>,
     sensor_receiver: &embassy_sync::channel::Receiver<'_, NoopRawMutex, SensorReading, 20>,
 ) -> Result<(), MqttSessionError> {
@@ -460,8 +510,8 @@ async fn run_telemetry_loop(
                     reading.moisture, reading.raw, reading.timestamp
                 );
 
-                let moisture_topic = build_state_topic(DEVICE_ID, SENSOR_ID, "moisture");
-                let raw_topic = build_state_topic(DEVICE_ID, SENSOR_ID, "raw");
+                let moisture_topic = build_state_topic(device_id, SENSOR_ID, "moisture");
+                let raw_topic = build_state_topic(device_id, SENSOR_ID, "raw");
 
                 let mut moisture_payload = String::<16>::new();
                 if write!(&mut moisture_payload, "{}", reading.moisture).is_err() {
@@ -548,6 +598,7 @@ async fn run_telemetry_loop(
 /// When mqtt is disabled, uses log-only mode for testing.
 #[embassy_executor::task]
 async fn mqtt_connection_task(
+    device_id: &'static heapless::String<16>,
     #[cfg(feature = "mqtt")] stack: &'static Stack<'static>,
     #[cfg(feature = "mqtt")] sensor_receiver: embassy_sync::channel::Receiver<
         'static,
@@ -577,7 +628,7 @@ async fn mqtt_connection_task(
         "mqtt: broker configured - {}:{}",
         mqtt_broker_host, mqtt_broker_port
     );
-    info!("mqtt: client ID - {}", DEVICE_ID);
+    info!("mqtt: client ID - {}", device_id.as_str());
     info!("mqtt: keep-alive - {}s", MQTT_KEEP_ALIVE_SECS);
     info!("mqtt: session expiry - {}s", MQTT_SESSION_EXPIRY_SECS);
 
@@ -661,8 +712,9 @@ async fn mqtt_connection_task(
             };
 
             // Stage 5: Connect MQTT client, publish availability and discovery
-            let lwt_topic = build_availability_topic(DEVICE_ID);
+            let lwt_topic = build_availability_topic(device_id.as_str());
             let mut client = match connect_mqtt_client(
+                device_id.as_str(),
                 tcp_socket,
                 mqtt_username,
                 mqtt_password,
@@ -688,11 +740,11 @@ async fn mqtt_connection_task(
             };
 
             // Stage 6: Run telemetry publishing loop
-            let _ = run_telemetry_loop(&mut client, &sensor_receiver).await;
+            let _ = run_telemetry_loop(device_id.as_str(), &mut client, &sensor_receiver).await;
 
             // If we exit from the telemetry loop, attempt to publish offline status
             info!("mqtt: publishing availability status (offline)...");
-            let availability_topic = build_availability_topic(DEVICE_ID);
+            let availability_topic = build_availability_topic(device_id.as_str());
             if let Err(e) = client
                 .publish(
                     availability_topic.as_str(),
@@ -717,7 +769,7 @@ async fn mqtt_connection_task(
     #[cfg(not(feature = "mqtt"))]
     {
         let mut publog = LoggerPublisher;
-        let _ = publish_discovery(&mut publog, DEVICE_ID, SENSOR_ID).await;
+        let _ = publish_discovery(&mut publog, device_id.as_str(), SENSOR_ID).await;
         MQTT_CONNECTED.signal(true);
         info!("mqtt: log-only mode active (enable mqtt feature for real client)");
 
@@ -765,11 +817,22 @@ async fn network_task(
 
     info!("wifi: connecting...");
 
+    // Wait for connection with timeout (60 seconds for initial connection)
+    // Note: We don't restart the driver on first boot failure to avoid illegal instruction crashes
+    // Driver restart is only used for reconnection after successful initial connection
+    const CONNECTION_TIMEOUT_SECS: u64 = 60;
+    let start = embassy_time::Instant::now();
     loop {
         if wifi.is_connected().unwrap_or(false) {
             info!("wifi: connected!");
             break;
         }
+
+        if start.elapsed().as_secs() >= CONNECTION_TIMEOUT_SECS {
+            error!("wifi: connection timeout after {}s - check credentials and signal", CONNECTION_TIMEOUT_SECS);
+            return;
+        }
+
         Timer::after(Duration::from_millis(100)).await;
     }
 
@@ -800,6 +863,10 @@ async fn network_task(
         info!("network: ready, TCP/IP stack available via esp-radio Interfaces");
     }
 
+    // Reconnection loop with timeout and driver restart capability
+    let mut reconnect_failures = 0u8;
+    const MAX_RECONNECT_FAILURES: u8 = 3;
+
     loop {
         Timer::after(Duration::from_secs(5)).await;
 
@@ -808,13 +875,78 @@ async fn network_task(
 
             if let Err(e) = wifi.connect() {
                 error!("wifi reconnect failed: {:?}", e);
+                reconnect_failures = reconnect_failures.saturating_add(1);
+
+                // After multiple failures, try restarting the driver
+                if reconnect_failures >= MAX_RECONNECT_FAILURES {
+                    warn!(
+                        "wifi: {} consecutive reconnect failures, restarting driver...",
+                        reconnect_failures
+                    );
+
+                    if let Err(e) = wifi.stop() {
+                        error!("wifi: stop failed during recovery: {:?}", e);
+                    }
+                    Timer::after(Duration::from_secs(1)).await;
+
+                    if let Err(e) = wifi.start() {
+                        error!("wifi: start failed during recovery: {:?}", e);
+                        continue;
+                    }
+                    Timer::after(Duration::from_secs(1)).await;
+
+                    if let Err(e) = wifi.connect() {
+                        error!("wifi: connect failed after recovery: {:?}", e);
+                        continue;
+                    }
+
+                    reconnect_failures = 0;
+                }
             } else {
+                let reconnect_start = embassy_time::Instant::now();
+                const RECONNECT_TIMEOUT_SECS: u64 = 15;
+                let mut reconnected = false;
+
                 loop {
                     if wifi.is_connected().unwrap_or(false) {
                         info!("wifi: reconnected!");
+                        reconnect_failures = 0;
+                        reconnected = true;
                         break;
                     }
+
+                    if reconnect_start.elapsed().as_secs() >= RECONNECT_TIMEOUT_SECS {
+                        warn!("wifi: reconnect timeout after {}s", RECONNECT_TIMEOUT_SECS);
+                        reconnect_failures = reconnect_failures.saturating_add(1);
+                        break;
+                    }
+
                     Timer::after(Duration::from_millis(100)).await;
+                }
+
+                // After timeout, check if we should restart driver
+                if !reconnected && reconnect_failures >= MAX_RECONNECT_FAILURES {
+                    warn!(
+                        "wifi: {} consecutive reconnect timeouts, restarting driver...",
+                        reconnect_failures
+                    );
+
+                    if let Err(e) = wifi.stop() {
+                        error!("wifi: stop failed during recovery: {:?}", e);
+                    }
+                    Timer::after(Duration::from_secs(1)).await;
+
+                    if let Err(e) = wifi.start() {
+                        error!("wifi: start failed during recovery: {:?}", e);
+                        continue;
+                    }
+                    Timer::after(Duration::from_secs(1)).await;
+
+                    if let Err(e) = wifi.connect() {
+                        error!("wifi: connect failed after recovery: {:?}", e);
+                    }
+
+                    reconnect_failures = 0;
                 }
             }
         }
@@ -834,6 +966,14 @@ async fn main(spawner: Spawner) -> ! {
     let sw_interrupt =
         esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
+
+    // Generate unique device ID from MAC address
+    let device_id = generate_device_id();
+    info!("device: generated ID from MAC: {}", device_id.as_str());
+
+    // Store device_id in static memory for 'static lifetime requirement
+    use alloc::boxed::Box;
+    let device_id: &'static heapless::String<16> = Box::leak(Box::new(device_id));
 
     // --- Wi‑Fi bring‑up (STA) ---------------------------------------------------------------
     // Credentials source options:
@@ -958,11 +1098,11 @@ async fn main(spawner: Spawner) -> ! {
 
                 #[cfg(feature = "mqtt")]
                 spawner
-                    .spawn(mqtt_connection_task(stack, sensor_receiver))
+                    .spawn(mqtt_connection_task(device_id, stack, sensor_receiver))
                     .ok();
 
                 #[cfg(not(feature = "mqtt"))]
-                spawner.spawn(mqtt_connection_task()).ok();
+                spawner.spawn(mqtt_connection_task(device_id)).ok();
             }
             Err(e) => {
                 error!("esp_radio init failed: {:?}", e);
@@ -988,7 +1128,11 @@ async fn main(spawner: Spawner) -> ! {
         SENSOR_DRY, SENSOR_WET
     );
     info!("sensor: watering threshold = {}%", MOISTURE_THRESHOLD);
-    info!("sensor: device_id={}, sensor_id={}", DEVICE_ID, SENSOR_ID);
+    info!(
+        "sensor: device_id={}, sensor_id={}",
+        device_id.as_str(),
+        SENSOR_ID
+    );
 
     loop {
         Timer::after(Duration::from_secs(3600)).await;
