@@ -401,25 +401,26 @@ This allows testing firmware in simulation before deploying to hardware.
 - Readings are sent via `embassy-sync::channel` to MQTT publish task
 - Task-based design provides fault isolation and continuous operation
 
-**Hardware Configuration** (src/bin/main.rs):
+**Hardware Configuration** (ADC setup in src/bin/main.rs):
 - ADC1 configured on GPIO0 (Xiao ESP32-C6 pin A0)
 - 6dB attenuation (measuring range 0-2450mV)
 - Resistive moisture sensor (shows higher voltage when wet, lower when dry)
 
-**Calibration** (constants in src/bin/main.rs):
+**Calibration** (constants in src/sensor.rs):
 - `SENSOR_DRY = 2188`: ADC reading in air (0% moisture)
 - `SENSOR_WET = 4095`: ADC reading fully submerged (100% moisture)
+- `MOISTURE_THRESHOLD = 30`: Watering threshold (30% moisture)
 - Run calibration routine (commented at end of main.rs) to recalibrate for different sensors
 
-**Conversion Function** (src/bin/main.rs):
+**Conversion Function** (src/sensor.rs):
 ```rust
-fn raw_to_moisture_percent(raw: u16) -> u8
+pub fn raw_to_moisture_percent(raw: u16) -> u8
 ```
 - Linear interpolation between calibration points
 - Returns 0-100% moisture level
 - Handles out-of-range values (clamps to 0% or 100%)
 
-**Sensor Task Behavior** (`moisture_sensor_task`):
+**Sensor Task Behavior** (`moisture_sensor_task` in src/sensor.rs):
 - Reads sensor every 5 seconds
 - Converts raw ADC values to moisture percentage
 - Creates `SensorReading` struct with moisture, raw value, and timestamp
@@ -429,14 +430,14 @@ fn raw_to_moisture_percent(raw: u16) -> u8
 
 ### Calibration Procedure
 
-A calibration routine is preserved as commented code at the end of `src/bin/main.rs` (lines 276-375). To recalibrate:
+A calibration routine is preserved as commented code at the end of `src/bin/main.rs`. To recalibrate:
 
 1. Replace the main loop with the calibration code
 2. Flash to device: `cargo run`
 3. Follow RTT prompts:
    - Keep sensor in air for 10 dry readings
    - Submerge sensor in water for 10 wet readings
-4. Update `SENSOR_DRY` and `SENSOR_WET` constants with the averages
+4. Update `SENSOR_DRY` and `SENSOR_WET` constants in `src/sensor.rs` with the averages
 5. Restore the monitoring loop
 
 ### Home Assistant MQTT Discovery (Implemented)

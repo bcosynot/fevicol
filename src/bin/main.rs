@@ -7,7 +7,7 @@
 )]
 
 use defmt::{error, info, warn};
-use esp_hal::analog::adc::{Adc, AdcConfig, AdcPin, Attenuation};
+use esp_hal::analog::adc::{Adc, AdcConfig, Attenuation};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use panic_rtt_target as _;
@@ -16,7 +16,7 @@ use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Timer};
 
 #[cfg(feature = "mqtt")]
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -47,9 +47,12 @@ use fevicol::mqtt::LoggerPublisher;
 #[cfg(feature = "mqtt")]
 use fevicol::mqtt::{
     EmbassyNetTransport, MqttClientConfig, init_rust_mqtt_client, interpret_connack_reason,
-};
-use fevicol::mqtt::{
     MqQos, MqttPublish, build_availability_topic, build_state_topic, publish_discovery,
+};
+#[cfg(not(feature = "mqtt"))]
+use fevicol::mqtt::publish_discovery;
+use fevicol::sensor::{
+    MOISTURE_THRESHOLD, SENSOR_DRY, SENSOR_WET, SensorReading, moisture_sensor_task,
 };
 
 #[cfg(feature = "mqtt")]
@@ -60,11 +63,6 @@ use heapless::String;
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
-
-// Type aliases for moisture sensor task parameters
-type MoistureAdc = Adc<'static, esp_hal::peripherals::ADC1<'static>, esp_hal::Blocking>;
-type MoistureAdcPin =
-    AdcPin<esp_hal::peripherals::GPIO0<'static>, esp_hal::peripherals::ADC1<'static>>;
 
 // Device and sensor identifiers for MQTT topic namespacing
 // TODO: Consider generating DEVICE_ID from MAC address suffix for uniqueness
@@ -80,17 +78,6 @@ const MQTT_SESSION_EXPIRY_SECS: u32 = 3600; // 1 hour - supports battery-powered
 // Discovery topics follow the pattern: homeassistant/{component}/{device_id}/{sensor_id}/config
 // State topics follow the pattern: fevicol/{device_id}/{sensor_id}/{metric}
 // Discovery helpers moved to src/mqtt/discovery.rs
-
-/// Sensor reading data structure for inter-task communication
-#[derive(Clone, Copy, defmt::Format)]
-struct SensorReading {
-    /// Moisture percentage (0-100%)
-    moisture: u8,
-    /// Raw ADC value (0-4095)
-    raw: u16,
-    /// Timestamp in milliseconds since boot
-    timestamp: u64,
-}
 
 // Signal to notify when network is ready
 static NETWORK_READY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
@@ -112,76 +99,6 @@ static MQTT_CONNECTION_HEALTHY: AtomicBool = AtomicBool::new(false);
 static STACK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 #[cfg(feature = "mqtt")]
 static NET_STACK: StaticCell<Stack<'static>> = StaticCell::new();
-
-// Calibration constants from sensor calibration routine
-const SENSOR_DRY: u16 = 2188; // ADC value when sensor is in air (0% moisture)
-const SENSOR_WET: u16 = 4095; // ADC value when sensor is in water (100% moisture)
-
-// Watering threshold: trigger pump when moisture falls below this percentage
-const MOISTURE_THRESHOLD: u8 = 30; // 30% moisture
-
-/// Convert raw ADC reading to moisture percentage (0-100%)
-fn raw_to_moisture_percent(raw: u16) -> u8 {
-    if raw <= SENSOR_DRY {
-        return 0; // Drier than calibrated dry point
-    }
-    if raw >= SENSOR_WET {
-        return 100; // Wetter than calibrated wet point
-    }
-
-    // Linear interpolation between dry (0%) and wet (100%)
-    let range = SENSOR_WET - SENSOR_DRY;
-    let offset = raw - SENSOR_DRY;
-    let percent = (offset as u32 * 100) / range as u32;
-    percent.min(100) as u8
-}
-
-/// Moisture sensor task: reads ADC periodically and sends readings to MQTT publisher
-#[embassy_executor::task]
-async fn moisture_sensor_task(
-    mut adc: MoistureAdc,
-    mut pin: MoistureAdcPin,
-    sender: embassy_sync::channel::Sender<'static, NoopRawMutex, SensorReading, 20>,
-) {
-    info!("sensor: task started");
-
-    loop {
-        match adc.read_oneshot(&mut pin) {
-            Ok(raw) => {
-                let moisture_percent = raw_to_moisture_percent(raw);
-                let timestamp = Instant::now().as_millis();
-
-                let reading = SensorReading {
-                    moisture: moisture_percent,
-                    raw,
-                    timestamp,
-                };
-
-                if sender.try_send(reading).is_err() {
-                    warn!("sensor: channel full, dropping reading");
-                }
-
-                if moisture_percent < MOISTURE_THRESHOLD {
-                    warn!(
-                        "sensor: moisture={}% (raw={}), BELOW threshold {}% - pump should activate",
-                        moisture_percent, raw, MOISTURE_THRESHOLD
-                    );
-                } else {
-                    info!(
-                        "sensor: moisture={}% (raw={}), above threshold",
-                        moisture_percent, raw
-                    );
-                }
-            }
-            Err(_) => {
-                error!("sensor: ADC read failed");
-            }
-        }
-
-        // Read every 5 seconds
-        Timer::after(Duration::from_secs(5)).await;
-    }
-}
 
 /// MQTT connection management task: maintains connection to MQTT broker
 ///

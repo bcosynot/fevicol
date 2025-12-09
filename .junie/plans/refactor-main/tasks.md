@@ -125,47 +125,47 @@ This document provides a detailed task breakdown for implementing the refactorin
 **Note**: This phase is independent and can be done in parallel with Phases 1-2
 
 #### Sub-phase 3.1: Create Sensor Module
-- [ ] (Phase 3.1) Create `src/sensor.rs` file
-- [ ] (Phase 3.1) Add `sensor` module declaration to `src/lib.rs`
+- [x] (Phase 3.1) Create `src/sensor.rs` file
+- [x] (Phase 3.1) Add `sensor` module declaration to `src/lib.rs`
 
 #### Sub-phase 3.2: Extract Sensor Types and Constants
-- [ ] (Phase 3.2) Move `SensorReading` struct to `src/sensor.rs`
-- [ ] (Phase 3.2) Move `SENSOR_DRY` calibration constant
-- [ ] (Phase 3.2) Move `SENSOR_WET` calibration constant
-- [ ] (Phase 3.2) Move `MOISTURE_THRESHOLD` constant
-- [ ] (Phase 3.2) Move `MoistureAdc` type alias
-- [ ] (Phase 3.2) Move `MoistureAdcPin` type alias
-- [ ] (Phase 3.2) Add appropriate visibility modifiers and derive macros
+- [x] (Phase 3.2) Move `SensorReading` struct to `src/sensor.rs`
+- [x] (Phase 3.2) Move `SENSOR_DRY` calibration constant
+- [x] (Phase 3.2) Move `SENSOR_WET` calibration constant
+- [x] (Phase 3.2) Move `MOISTURE_THRESHOLD` constant
+- [x] (Phase 3.2) Move `MoistureAdc` type alias
+- [x] (Phase 3.2) Move `MoistureAdcPin` type alias
+- [x] (Phase 3.2) Add appropriate visibility modifiers and derive macros
 
 #### Sub-phase 3.3: Extract Conversion Function
-- [ ] (Phase 3.3) Move `raw_to_moisture_percent` function to `src/sensor.rs`
-- [ ] (Phase 3.3) Ensure function references calibration constants correctly
-- [ ] (Phase 3.3) Add documentation comments if not present
+- [x] (Phase 3.3) Move `raw_to_moisture_percent` function to `src/sensor.rs`
+- [x] (Phase 3.3) Ensure function references calibration constants correctly
+- [x] (Phase 3.3) Add documentation comments if not present
 
 #### Sub-phase 3.4: Extract Sensor Task
-- [ ] (Phase 3.4) Move `moisture_sensor_task` function to `src/sensor.rs`
-- [ ] (Phase 3.4) Add necessary imports for `embassy_executor`, `embassy_time`, `embassy_sync`, `defmt`
-- [ ] (Phase 3.4) Add necessary imports for ADC types from `esp_hal`
-- [ ] (Phase 3.4) Update function signature visibility as needed
+- [x] (Phase 3.4) Move `moisture_sensor_task` function to `src/sensor.rs`
+- [x] (Phase 3.4) Add necessary imports for `embassy_executor`, `embassy_time`, `embassy_sync`, `defmt`
+- [x] (Phase 3.4) Add necessary imports for ADC types from `esp_hal`
+- [x] (Phase 3.4) Update function signature visibility as needed
 
 #### Sub-phase 3.5: Update main.rs Imports
-- [ ] (Phase 3.5) Remove extracted code from `main.rs`
-- [ ] (Phase 3.5) Add import statements for the new `sensor` module items
-- [ ] (Phase 3.5) Update task spawning to use the new module path
-- [ ] (Phase 3.5) Ensure `SensorReading` is accessible where needed (e.g., in mqtt_connection_task)
+- [x] (Phase 3.5) Remove extracted code from `main.rs`
+- [x] (Phase 3.5) Add import statements for the new `sensor` module items
+- [x] (Phase 3.5) Update task spawning to use the new module path
+- [x] (Phase 3.5) Ensure `SensorReading` is accessible where needed (e.g., in mqtt_connection_task)
 
 #### Sub-phase 3.6: Verification and Quality Checks
-- [ ] (Phase 3.6) Run `cargo fmt --all -- --check` and fix any formatting issues
-- [ ] (Phase 3.6) Run `cargo clippy --all-features --workspace -- -D warnings` and address warnings
-- [ ] (Phase 3.6) Run `cargo build` to verify build
-- [ ] (Phase 3.6) Run `cargo build --features mqtt` to verify mqtt build
-- [ ] (Phase 3.6) Run `cargo test --no-run` to verify test compilation
+- [x] (Phase 3.6) Run `cargo fmt --all -- --check` and fix any formatting issues
+- [x] (Phase 3.6) Run `cargo clippy --all-features --workspace -- -D warnings` and address warnings
+- [x] (Phase 3.6) Run `cargo build` to verify build
+- [x] (Phase 3.6) Run `cargo build --features mqtt` to verify mqtt build
+- [x] (Phase 3.6) Run `cargo test --no-run` to verify test compilation
 
 #### Sub-phase 3.7: Documentation Updates
-- [ ] (Phase 3.7) Update `CLAUDE.md` section "Moisture Sensing" to reference new module location
-- [ ] (Phase 3.7) Update `CLAUDE.md` section "Calibration Procedure" to reference new module
-- [ ] (Phase 3.7) Update `guidelines.md` section "Sensor calibration" to reference new module
-- [ ] (Phase 3.7) Update `README.md` "Project Structure" section to include `src/sensor.rs`
+- [x] (Phase 3.7) Update `CLAUDE.md` section "Moisture Sensing" to reference new module location
+- [x] (Phase 3.7) Update `CLAUDE.md` section "Calibration Procedure" to reference new module
+- [x] (Phase 3.7) Update `guidelines.md` section "Sensor calibration" to reference new module
+- [x] (Phase 3.7) Update `README.md` "Project Structure" section to include `src/sensor.rs`
 
 ---
 
