@@ -18,17 +18,13 @@ use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 
-use core::sync::atomic::AtomicBool;
 #[cfg(feature = "mqtt")]
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(feature = "mqtt")]
 use embassy_net::{Config as NetConfig, Stack, StackResources};
 
 use static_cell::StaticCell;
-
-use core::fmt::Write;
-use heapless::String;
 
 // Optional local secrets support
 #[cfg(feature = "local_secrets")]
@@ -46,11 +42,20 @@ extern crate alloc;
 // MQTT client abstractions moved to crate module (src/mqtt/client.rs)
 // ----------------------------------------------------------------------------
 
+#[cfg(not(feature = "mqtt"))]
+use fevicol::mqtt::LoggerPublisher;
 #[cfg(feature = "mqtt")]
 use fevicol::mqtt::{
     EmbassyNetTransport, MqttClientConfig, init_rust_mqtt_client, interpret_connack_reason,
 };
-use fevicol::mqtt::{LoggerPublisher, MqQos, MqttPublish};
+use fevicol::mqtt::{
+    MqQos, MqttPublish, build_availability_topic, build_state_topic, publish_discovery,
+};
+
+#[cfg(feature = "mqtt")]
+use core::fmt::Write;
+#[cfg(feature = "mqtt")]
+use heapless::String;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -74,14 +79,7 @@ const MQTT_SESSION_EXPIRY_SECS: u32 = 3600; // 1 hour - supports battery-powered
 // Home Assistant MQTT Discovery Configuration
 // Discovery topics follow the pattern: homeassistant/{component}/{device_id}/{sensor_id}/config
 // State topics follow the pattern: fevicol/{device_id}/{sensor_id}/{metric}
-
-/// Project version from Cargo.toml for device metadata
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Home Assistant device information (shared across all entities)
-const DEVICE_NAME: &str = "Fevicol Plant Monitor";
-const DEVICE_MANUFACTURER: &str = "Fevicol Project";
-const DEVICE_MODEL: &str = "ESP32-C6 Moisture Sensor";
+// Discovery helpers moved to src/mqtt/discovery.rs
 
 /// Sensor reading data structure for inter-task communication
 #[derive(Clone, Copy, defmt::Format)]
@@ -106,6 +104,7 @@ static MQTT_CONNECTED: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 
 // Connection health flag: set to false when disconnection is detected
 // Used by publish task to signal errors and by connection task to detect disconnection
+#[cfg(feature = "mqtt")]
 static MQTT_CONNECTION_HEALTHY: AtomicBool = AtomicBool::new(false);
 
 // embassy-net stack resources (for rust-mqtt integration)
@@ -135,187 +134,6 @@ fn raw_to_moisture_percent(raw: u16) -> u8 {
     let offset = raw - SENSOR_DRY;
     let percent = (offset as u32 * 100) / range as u32;
     percent.min(100) as u8
-}
-
-// ============================================================================
-// Home Assistant MQTT Discovery Helpers
-// ============================================================================
-
-/// Build a Home Assistant discovery topic
-/// Format: homeassistant/{component}/{device_id}/{entity_id}/config
-fn build_discovery_topic(component: &str, device_id: &str, entity_id: &str) -> String<128> {
-    let mut topic = String::new();
-    write!(
-        topic,
-        "homeassistant/{}/{}/{}/config",
-        component, device_id, entity_id
-    )
-    .ok();
-    topic
-}
-
-/// Build a state topic for sensor readings
-/// Format: fevicol/{device_id}/{sensor_id}/{metric}
-fn build_state_topic(device_id: &str, sensor_id: &str, metric: &str) -> String<128> {
-    let mut topic = String::new();
-    write!(topic, "fevicol/{}/{}/{}", device_id, sensor_id, metric).ok();
-    topic
-}
-
-/// Build availability topic for device online/offline status
-/// Format: fevicol/{device_id}/status
-fn build_availability_topic(device_id: &str) -> String<64> {
-    let mut topic = String::new();
-    write!(topic, "fevicol/{}/status", device_id).ok();
-    topic
-}
-
-/// Create Home Assistant discovery payload for moisture percentage sensor
-fn create_moisture_discovery_payload(device_id: &str, sensor_id: &str) -> String<1024> {
-    let mut payload = String::new();
-    let state_topic = build_state_topic(device_id, sensor_id, "moisture");
-    let availability_topic = build_availability_topic(device_id);
-    let unique_id = format_unique_id(device_id, sensor_id, "moisture");
-
-    // Build JSON manually (no serde_json in no_std)
-    write!(payload, "{{").ok();
-    write!(payload, "\"unique_id\":\"{}\",", unique_id.as_str()).ok();
-    write!(payload, "\"name\":\"Moisture Sensor\",").ok();
-    write!(payload, "\"state_topic\":\"{}\",", state_topic.as_str()).ok();
-    write!(payload, "\"device_class\":\"moisture\",").ok();
-    write!(payload, "\"unit_of_measurement\":\"%\",").ok();
-    write!(payload, "\"icon\":\"mdi:water-percent\",").ok();
-    write!(
-        payload,
-        "\"availability_topic\":\"{}\",",
-        availability_topic.as_str()
-    )
-    .ok();
-    write!(payload, "\"payload_available\":\"online\",").ok();
-    write!(payload, "\"payload_not_available\":\"offline\",").ok();
-
-    // Add device information
-    write!(payload, "\"device\":{{").ok();
-    write!(
-        payload,
-        "\"identifiers\":[\"{}\"],",
-        device_id.replace('-', "_")
-    )
-    .ok();
-    write!(payload, "\"name\":\"{} - {}\",", DEVICE_NAME, device_id).ok();
-    write!(payload, "\"model\":\"{}\",", DEVICE_MODEL).ok();
-    write!(payload, "\"manufacturer\":\"{}\",", DEVICE_MANUFACTURER).ok();
-    write!(payload, "\"sw_version\":\"{}\"", VERSION).ok();
-    write!(payload, "}}").ok(); // close device
-
-    write!(payload, "}}").ok(); // close root
-    payload
-}
-
-/// Create Home Assistant discovery payload for raw ADC sensor (debugging)
-fn create_raw_discovery_payload(device_id: &str, sensor_id: &str) -> String<1024> {
-    let mut payload = String::new();
-    let state_topic = build_state_topic(device_id, sensor_id, "raw");
-    let availability_topic = build_availability_topic(device_id);
-    let unique_id = format_unique_id(device_id, sensor_id, "raw");
-
-    // Build JSON manually
-    write!(payload, "{{").ok();
-    write!(payload, "\"unique_id\":\"{}\",", unique_id.as_str()).ok();
-    write!(payload, "\"name\":\"Moisture Raw ADC\",").ok();
-    write!(payload, "\"state_topic\":\"{}\",", state_topic.as_str()).ok();
-    write!(payload, "\"unit_of_measurement\":\"ADC\",").ok();
-    write!(payload, "\"icon\":\"mdi:chip\",").ok();
-    write!(
-        payload,
-        "\"availability_topic\":\"{}\",",
-        availability_topic.as_str()
-    )
-    .ok();
-    write!(payload, "\"payload_available\":\"online\",").ok();
-    write!(payload, "\"payload_not_available\":\"offline\",").ok();
-
-    // Add device information (same device as moisture sensor)
-    write!(payload, "\"device\":{{").ok();
-    write!(
-        payload,
-        "\"identifiers\":[\"{}\"],",
-        device_id.replace('-', "_")
-    )
-    .ok();
-    write!(payload, "\"name\":\"{} - {}\",", DEVICE_NAME, device_id).ok();
-    write!(payload, "\"model\":\"{}\",", DEVICE_MODEL).ok();
-    write!(payload, "\"manufacturer\":\"{}\",", DEVICE_MANUFACTURER).ok();
-    write!(payload, "\"sw_version\":\"{}\"", VERSION).ok();
-    write!(payload, "}}").ok(); // close device
-
-    write!(payload, "}}").ok(); // close root
-    payload
-}
-
-/// Format a unique ID for Home Assistant entities
-/// Format: {device_id}_{sensor_id}_{metric}
-fn format_unique_id(device_id: &str, sensor_id: &str, metric: &str) -> String<64> {
-    let mut id = String::new();
-    // Replace hyphens with underscores for valid entity IDs
-    write!(
-        id,
-        "{}_{}_{}",
-        device_id.replace('-', "_"),
-        sensor_id.replace('-', "_"),
-        metric
-    )
-    .ok();
-    id
-}
-
-/// Publish Home Assistant discovery messages for all sensors over an MQTT client.
-/// The client must already be connected. Messages are published retained with QoS 1.
-async fn publish_discovery<C: MqttPublish + ?Sized>(
-    client: &mut C,
-    device_id: &str,
-    sensor_id: &str,
-) -> Result<(), C::Err> {
-    info!("mqtt: publishing Home Assistant discovery messages...");
-
-    let availability_topic = build_availability_topic(device_id);
-    client
-        .publish(
-            availability_topic.as_str(),
-            b"online",
-            MqQos::AtLeastOnce,
-            true,
-        )
-        .await?;
-
-    Timer::after(Duration::from_millis(100)).await;
-
-    let moisture_topic = build_discovery_topic("sensor", device_id, "moisture");
-    let moisture_payload = create_moisture_discovery_payload(device_id, sensor_id);
-    client
-        .publish(
-            moisture_topic.as_str(),
-            moisture_payload.as_bytes(),
-            MqQos::AtLeastOnce,
-            true,
-        )
-        .await?;
-
-    Timer::after(Duration::from_millis(100)).await;
-
-    let raw_topic = build_discovery_topic("sensor", device_id, "raw");
-    let raw_payload = create_raw_discovery_payload(device_id, sensor_id);
-    client
-        .publish(
-            raw_topic.as_str(),
-            raw_payload.as_bytes(),
-            MqQos::AtLeastOnce,
-            true,
-        )
-        .await?;
-
-    info!("mqtt: Home Assistant discovery published");
-    Ok(())
 }
 
 /// Moisture sensor task: reads ADC periodically and sends readings to MQTT publisher

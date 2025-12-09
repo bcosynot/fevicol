@@ -482,12 +482,13 @@ A calibration routine is preserved as commented code at the end of `src/bin/main
 
 **JSON Payload Generation**:
 - Uses `heapless::String<1024>` for manual JSON formatting (no `serde_json` in `no_std`)
-- Helper functions in `src/bin/main.rs`:
+- Helper functions in `src/mqtt/discovery.rs`:
   - `create_moisture_discovery_payload()` - Moisture sensor discovery JSON
   - `create_raw_discovery_payload()` - Raw ADC sensor discovery JSON
   - `build_discovery_topic()` - Format discovery topic strings
-  - `build_state_topic()` - Format state topic strings
+  - `build_state_topic()` - Format state topic strings (also used for telemetry publishing)
   - `build_availability_topic()` - Format availability topic
+  - `publish_discovery()` - Publishes all discovery messages with proper pacing
 
 **Publishing Sequence** (when MQTT client is connected):
 1. Publish availability as `online` (retain=true)

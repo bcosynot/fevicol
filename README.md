@@ -244,6 +244,10 @@
    - bin/
      - main.rs — entrypoint; configures clocks, allocators, starts scheduler, Wi‑Fi bring‑up, ADC loop
      - secrets.rs — optional (git‑ignored) when using the `local_secrets` feature
+   - mqtt/
+     - mod.rs — MQTT module re-exports
+     - client.rs — MQTT client abstraction (MqttPublish trait, LoggerPublisher, EmbassyNetTransport, RustMqttPublisher)
+     - discovery.rs — Home Assistant MQTT Discovery protocol (topic builders, payload generation, publish_discovery)
    - lib.rs — `#![no_std]`
  - tests/ — embedded‑test suites (e.g., `hello_test.rs`) [may need to be created]
  

@@ -30,34 +30,34 @@ This document provides a detailed task breakdown for implementing the refactorin
 - [x] (Phase 1.3) Move `EmbassyNetTransport::new()` and `socket_mut()` methods
 - [x] (Phase 1.3) Move `ErrorType`, `Read`, and `IoWrite` trait implementations
 - [x] (Phase 1.3) Wrap with `#[cfg(feature = "mqtt")]` attribute
-- [ ] (Phase 1.3) Add necessary imports for `embassy_net`, `embedded_io_async` types
+- [x] (Phase 1.3) Add necessary imports for `embassy_net`, `embedded_io_async` types
 
 #### Sub-phase 1.4: Extract Client Wrapper (feature-gated)
-- [ ] (Phase 1.4) Move `RustMqttPublisher` struct to `src/mqtt/client.rs`
-- [ ] (Phase 1.4) Move `MqttPublish` implementation for `RustMqttPublisher`
-- [ ] (Phase 1.4) Move `interpret_connack_reason` function
-- [ ] (Phase 1.4) Move `MqttClientConfig` struct
-- [ ] (Phase 1.4) Move `init_rust_mqtt_client` function
-- [ ] (Phase 1.4) Wrap all with `#[cfg(feature = "mqtt")]` attribute
-- [ ] (Phase 1.4) Add necessary imports for `rust_mqtt` types
+- [x] (Phase 1.4) Move `RustMqttPublisher` struct to `src/mqtt/client.rs`
+- [x] (Phase 1.4) Move `MqttPublish` implementation for `RustMqttPublisher`
+- [x] (Phase 1.4) Move `interpret_connack_reason` function
+- [x] (Phase 1.4) Move `MqttClientConfig` struct
+- [x] (Phase 1.4) Move `init_rust_mqtt_client` function
+- [x] (Phase 1.4) Wrap all with `#[cfg(feature = "mqtt")]` attribute
+- [x] (Phase 1.4) Add necessary imports for `rust_mqtt` types
 
 #### Sub-phase 1.5: Update main.rs Imports
-- [ ] (Phase 1.5) Remove extracted code from `main.rs`
-- [ ] (Phase 1.5) Add import statements for the new `mqtt::client` module items
-- [ ] (Phase 1.5) Update any type references to use the new module path
-- [ ] (Phase 1.5) Verify feature-gated imports work correctly for both `mqtt` and non-`mqtt` builds
+- [x] (Phase 1.5) Remove extracted code from `main.rs`
+- [x] (Phase 1.5) Add import statements for the new `mqtt::client` module items
+- [x] (Phase 1.5) Update any type references to use the new module path
+- [x] (Phase 1.5) Verify feature-gated imports work correctly for both `mqtt` and non-`mqtt` builds
 
 #### Sub-phase 1.6: Verification and Quality Checks
-- [ ] (Phase 1.6) Run `cargo fmt --all -- --check` and fix any formatting issues
-- [ ] (Phase 1.6) Run `cargo clippy --all-features --workspace -- -D warnings` and address warnings
-- [ ] (Phase 1.6) Run `cargo build` (without mqtt feature) to verify non-mqtt build
-- [ ] (Phase 1.6) Run `cargo build --features mqtt` to verify mqtt build
-- [ ] (Phase 1.6) Run `cargo test --no-run` to verify test compilation
+- [x] (Phase 1.6) Run `cargo fmt --all -- --check` and fix any formatting issues
+- [x] (Phase 1.6) Run `cargo clippy --all-features --workspace -- -D warnings` and address warnings
+- [x] (Phase 1.6) Run `cargo build` (without mqtt feature) to verify non-mqtt build
+- [x] (Phase 1.6) Run `cargo build --features mqtt` to verify mqtt build
+- [x] (Phase 1.6) Run `cargo test --no-run` to verify test compilation
 
 #### Sub-phase 1.7: Documentation Updates
-- [ ] (Phase 1.7) Update `CLAUDE.md` section "MQTT Client Implementation" to reference new module location
-- [ ] (Phase 1.7) Update `guidelines.md` section "MQTT Client Implementation" to reference new module location
-- [ ] (Phase 1.7) Update `README.md` "Project Structure" section to reflect new `src/mqtt/` directory
+- [x] (Phase 1.7) Update `CLAUDE.md` section "MQTT Client Implementation" to reference new module location
+- [x] (Phase 1.7) Update `guidelines.md` section "MQTT Client Implementation" to reference new module location
+- [x] (Phase 1.7) Update `README.md` "Project Structure" section to reflect new `src/mqtt/` directory
 
 ---
 
@@ -70,49 +70,49 @@ This document provides a detailed task breakdown for implementing the refactorin
 **Dependency**: Phase 1 must be completed (depends on `MqttPublish` trait)
 
 #### Sub-phase 2.1: Create Discovery Module
-- [ ] (Phase 2.1) Create `src/mqtt/discovery.rs` file
-- [ ] (Phase 2.1) Add `discovery` module declaration to `src/mqtt/mod.rs`
+- [x] (Phase 2.1) Create `src/mqtt/discovery.rs` file
+- [x] (Phase 2.1) Add `discovery` module declaration to `src/mqtt/mod.rs`
 
 #### Sub-phase 2.2: Extract Device Metadata Constants
-- [ ] (Phase 2.2) Move `DEVICE_NAME` constant to `src/mqtt/discovery.rs`
-- [ ] (Phase 2.2) Move `DEVICE_MANUFACTURER` constant
-- [ ] (Phase 2.2) Move `DEVICE_MODEL` constant
-- [ ] (Phase 2.2) Move `VERSION` constant
-- [ ] (Phase 2.2) Add appropriate visibility modifiers
+- [x] (Phase 2.2) Move `DEVICE_NAME` constant to `src/mqtt/discovery.rs`
+- [x] (Phase 2.2) Move `DEVICE_MANUFACTURER` constant
+- [x] (Phase 2.2) Move `DEVICE_MODEL` constant
+- [x] (Phase 2.2) Move `VERSION` constant
+- [x] (Phase 2.2) Add appropriate visibility modifiers
 
 #### Sub-phase 2.3: Extract Topic Builder Functions
-- [ ] (Phase 2.3) Move `build_discovery_topic` function to `src/mqtt/discovery.rs`
-- [ ] (Phase 2.3) Move `build_state_topic` function
-- [ ] (Phase 2.3) Move `build_availability_topic` function
-- [ ] (Phase 2.3) Move `format_unique_id` function
-- [ ] (Phase 2.3) Add necessary imports for `heapless::String`
+- [x] (Phase 2.3) Move `build_discovery_topic` function to `src/mqtt/discovery.rs`
+- [x] (Phase 2.3) Move `build_state_topic` function
+- [x] (Phase 2.3) Move `build_availability_topic` function
+- [x] (Phase 2.3) Move `format_unique_id` function
+- [x] (Phase 2.3) Add necessary imports for `heapless::String`
 
 #### Sub-phase 2.4: Extract Payload Creator Functions
-- [ ] (Phase 2.4) Move `create_moisture_discovery_payload` function to `src/mqtt/discovery.rs`
-- [ ] (Phase 2.4) Move `create_raw_discovery_payload` function
-- [ ] (Phase 2.4) Ensure functions reference device metadata constants correctly
+- [x] (Phase 2.4) Move `create_moisture_discovery_payload` function to `src/mqtt/discovery.rs`
+- [x] (Phase 2.4) Move `create_raw_discovery_payload` function
+- [x] (Phase 2.4) Ensure functions reference device metadata constants correctly
 
 #### Sub-phase 2.5: Extract Discovery Publisher
-- [ ] (Phase 2.5) Move `publish_discovery` function to `src/mqtt/discovery.rs`
-- [ ] (Phase 2.5) Update function to import `MqttPublish` trait from `super::client`
-- [ ] (Phase 2.5) Add re-exports in `src/mqtt/mod.rs` for public discovery API
+- [x] (Phase 2.5) Move `publish_discovery` function to `src/mqtt/discovery.rs`
+- [x] (Phase 2.5) Update function to import `MqttPublish` trait from `super::client`
+- [x] (Phase 2.5) Add re-exports in `src/mqtt/mod.rs` for public discovery API
 
 #### Sub-phase 2.6: Update main.rs Imports
-- [ ] (Phase 2.6) Remove extracted code from `main.rs`
-- [ ] (Phase 2.6) Add import statements for the new `mqtt::discovery` module items
-- [ ] (Phase 2.6) Update any function calls to use the new module path
+- [x] (Phase 2.6) Remove extracted code from `main.rs`
+- [x] (Phase 2.6) Add import statements for the new `mqtt::discovery` module items
+- [x] (Phase 2.6) Update any function calls to use the new module path
 
 #### Sub-phase 2.7: Verification and Quality Checks
-- [ ] (Phase 2.7) Run `cargo fmt --all -- --check` and fix any formatting issues
-- [ ] (Phase 2.7) Run `cargo clippy --all-features --workspace -- -D warnings` and address warnings
-- [ ] (Phase 2.7) Run `cargo build` (without mqtt feature) to verify non-mqtt build
-- [ ] (Phase 2.7) Run `cargo build --features mqtt` to verify mqtt build
-- [ ] (Phase 2.7) Run `cargo test --no-run` to verify test compilation
+- [x] (Phase 2.7) Run `cargo fmt --all -- --check` and fix any formatting issues
+- [x] (Phase 2.7) Run `cargo clippy --all-features --workspace -- -D warnings` and address warnings
+- [x] (Phase 2.7) Run `cargo build` (without mqtt feature) to verify non-mqtt build
+- [x] (Phase 2.7) Run `cargo build --features mqtt` to verify mqtt build
+- [x] (Phase 2.7) Run `cargo test --no-run` to verify test compilation
 
 #### Sub-phase 2.8: Documentation Updates
-- [ ] (Phase 2.8) Update `CLAUDE.md` section "Home Assistant MQTT Discovery" to reference new module location
-- [ ] (Phase 2.8) Update `guidelines.md` if it references discovery functions
-- [ ] (Phase 2.8) Update `README.md` "Project Structure" section if not already updated in Phase 1
+- [x] (Phase 2.8) Update `CLAUDE.md` section "Home Assistant MQTT Discovery" to reference new module location
+- [x] (Phase 2.8) Update `guidelines.md` if it references discovery functions
+- [x] (Phase 2.8) Update `README.md` "Project Structure" section if not already updated in Phase 1
 
 ---
 
