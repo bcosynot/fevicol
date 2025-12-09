@@ -167,20 +167,43 @@ Implements:
 6. Return `RustMqttPublisher` wrapper implementing `MqttPublish` trait
 
 **Connection Lifecycle** (mqtt_connection_task):
+
+The main task orchestrates the connection lifecycle using helper functions:
+
 1. Wait for network stack to be ready (DHCP assigned IP)
-2. Perform DNS resolution for broker hostname (with exponential backoff and IP fallback)
-3. Establish TCP connection via `embassy_net::tcp::TcpSocket`
-4. Initialize rust-mqtt client with `init_rust_mqtt_client()`
-5. Publish availability as `online` (retained)
-6. Publish Home Assistant discovery messages with 100ms pacing
-7. Send sensor readings from channel to broker
-8. On connection loss: exponential backoff (2s → 30s max) and reconnect
-9. Re-publish discovery on reconnection
+2. **resolve_broker_address()**: Perform DNS resolution for broker hostname
+   - Includes exponential backoff and IP address fallback after 5 consecutive failures
+   - Returns `Result<Ipv4Address, MqttSessionError>`
+3. **establish_tcp_connection()**: Create and connect TCP socket
+   - Allocates TCP RX/TX buffers (2048 bytes each)
+   - Returns `Result<TcpSocket, MqttSessionError>`
+4. **connect_mqtt_client()**: Initialize MQTT client and publish initial messages
+   - Calls `init_rust_mqtt_client()` for CONNECT handshake
+   - Publishes availability as `online` (retained)
+   - Publishes Home Assistant discovery messages
+   - Returns `Result<RustMqttPublisher, MqttSessionError>`
+5. **run_telemetry_loop()**: Receive sensor readings and publish via MQTT
+   - Uses `embassy_futures::select` for sensor readings and 30s health check timeout
+   - Returns `Err(MqttSessionError)` on publish failure
+6. On connection loss: exponential backoff (2s → 30s max) and reconnect
+7. Re-publish discovery on reconnection
+
+**Error Type**: `MqttSessionError` enum with variants for DNS, TCP, MQTT connection, availability, discovery, and telemetry publish failures
 
 **Error Handling**:
-- DNS resolution failures: exponential backoff, fallback to IP address after repeated failures
-- TCP connection failures: exponential backoff (2s, 4s, 8s, 16s, 30s max)
-- MQTT CONNACK errors: logged with reason code interpretation (bad credentials, server unavailable, etc.)
+
+All MQTT connection errors are unified under the `MqttSessionError` enum:
+- `DnsResolutionFailed` / `DnsNoAddresses` / `InvalidIpAddress`: DNS errors with fallback to IP parsing after 5 failures
+- `TcpConnectionFailed`: TCP socket connection errors
+- `MqttConnectFailed(ReasonCode)`: MQTT CONNECT handshake failures with detailed reason code logging
+- `AvailabilityPublishFailed`: Failed to publish online status
+- `DiscoveryPublishFailed`: Failed to publish Home Assistant discovery messages
+- `TelemetryPublishFailed`: Failed to publish sensor readings
+
+Error handling strategy:
+- All errors trigger exponential backoff (2s, 4s, 8s, 16s, 30s max) and automatic reconnection
+- DNS failures: exponential backoff, fallback to IP address parsing after 5 consecutive failures
+- MQTT CONNACK errors: logged with detailed reason code interpretation and troubleshooting guidance
 - Publish failures: trigger reconnection (rust-mqtt v0.3 doesn't expose PUBACK reason codes)
 - Keep-alive timeout: rust-mqtt handles internally, failures trigger reconnection
 - All errors logged via defmt without panicking
@@ -401,25 +424,23 @@ This allows testing firmware in simulation before deploying to hardware.
 - Readings are sent via `embassy-sync::channel` to MQTT publish task
 - Task-based design provides fault isolation and continuous operation
 
-**Hardware Configuration** (src/bin/main.rs):
+**Hardware Configuration** (ADC setup in src/bin/main.rs):
 - ADC1 configured on GPIO0 (Xiao ESP32-C6 pin A0)
 - 6dB attenuation (measuring range 0-2450mV)
 - Resistive moisture sensor (shows higher voltage when wet, lower when dry)
 
-**Calibration** (constants in src/bin/main.rs):
+**Calibration** (constants in src/sensor.rs):
 - `SENSOR_DRY = 2188`: ADC reading in air (0% moisture)
 - `SENSOR_WET = 4095`: ADC reading fully submerged (100% moisture)
+- `MOISTURE_THRESHOLD = 30`: Watering threshold (30% moisture)
 - Run calibration routine (commented at end of main.rs) to recalibrate for different sensors
 
-**Conversion Function** (src/bin/main.rs):
-```rust
-fn raw_to_moisture_percent(raw: u16) -> u8
-```
+**Conversion Function** (src/sensor.rs):
 - Linear interpolation between calibration points
 - Returns 0-100% moisture level
 - Handles out-of-range values (clamps to 0% or 100%)
 
-**Sensor Task Behavior** (`moisture_sensor_task`):
+**Sensor Task Behavior** (`moisture_sensor_task` in src/sensor.rs):
 - Reads sensor every 5 seconds
 - Converts raw ADC values to moisture percentage
 - Creates `SensorReading` struct with moisture, raw value, and timestamp
@@ -429,15 +450,22 @@ fn raw_to_moisture_percent(raw: u16) -> u8
 
 ### Calibration Procedure
 
-A calibration routine is preserved as commented code at the end of `src/bin/main.rs` (lines 276-375). To recalibrate:
+A calibration feature is available via the `calibration` feature flag in `src/sensor.rs`. To recalibrate:
 
-1. Replace the main loop with the calibration code
-2. Flash to device: `cargo run`
+1. Build with calibration feature: `cargo build --features calibration`
+2. Flash to device: `cargo run --features calibration`
 3. Follow RTT prompts:
    - Keep sensor in air for 10 dry readings
    - Submerge sensor in water for 10 wet readings
-4. Update `SENSOR_DRY` and `SENSOR_WET` constants with the averages
-5. Restore the monitoring loop
+4. Update `SENSOR_DRY` and `SENSOR_WET` constants in `src/sensor.rs` with the averages
+5. Rebuild without calibration feature for normal operation
+
+**Calibration Task** (`calibration_task` in src/sensor.rs):
+- Feature-gated with `#[cfg(feature = "calibration")]`
+- Collects 10 dry readings (sensor in air) with 10-second preparation time
+- Collects 10 wet readings (sensor in water) with 15-second preparation time
+- Calculates and displays averaged calibration values
+- Outputs formatted constants ready to copy into `src/sensor.rs`
 
 ### Home Assistant MQTT Discovery (Implemented)
 
@@ -482,12 +510,13 @@ A calibration routine is preserved as commented code at the end of `src/bin/main
 
 **JSON Payload Generation**:
 - Uses `heapless::String<1024>` for manual JSON formatting (no `serde_json` in `no_std`)
-- Helper functions in `src/bin/main.rs`:
+- Helper functions in `src/mqtt/discovery.rs`:
   - `create_moisture_discovery_payload()` - Moisture sensor discovery JSON
   - `create_raw_discovery_payload()` - Raw ADC sensor discovery JSON
   - `build_discovery_topic()` - Format discovery topic strings
-  - `build_state_topic()` - Format state topic strings
+  - `build_state_topic()` - Format state topic strings (also used for telemetry publishing)
   - `build_availability_topic()` - Format availability topic
+  - `publish_discovery()` - Publishes all discovery messages with proper pacing
 
 **Publishing Sequence** (when MQTT client is connected):
 1. Publish availability as `online` (retain=true)

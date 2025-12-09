@@ -207,10 +207,11 @@ Additional Development Notes
   - Wi‑Fi operational in STA mode via esp‑radio with automatic reconnection
 
 - Sensor calibration
-  - Calibration constants in `main.rs`: `SENSOR_DRY = 2188`, `SENSOR_WET = 4095`
-  - Calibration routine preserved as commented code at end of `main.rs` (lines 276-375)
-  - To recalibrate: swap in calibration loop, flash, collect 10 dry + 10 wet readings, update constants
-  - Conversion function `raw_to_moisture_percent()` performs linear interpolation to 0-100%
+  - Calibration constants in `src/sensor.rs`: `SENSOR_DRY = 2188`, `SENSOR_WET = 4095`, `MOISTURE_THRESHOLD = 30`
+  - Calibration routine preserved as commented code at end of `main.rs`
+  - To recalibrate: swap in calibration loop, flash, collect 10 dry + 10 wet readings, update constants in `src/sensor.rs`
+  - Conversion function `raw_to_moisture_percent()` in `src/sensor.rs` performs linear interpolation to 0-100%
+  - Sensor task `moisture_sensor_task()` in `src/sensor.rs` reads ADC and publishes to channel
 
 - Code style
   - Follow existing import ordering and module layout as shown in `main.rs`/`tests/hello_test.rs`.

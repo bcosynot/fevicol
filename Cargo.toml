@@ -13,6 +13,7 @@ local_secrets = []
 # By default we keep integration in placeholder/log-only mode.
 # Enable the mqtt feature to compile with the MQTT client.
 mqtt = ["dep:rust-mqtt", "dep:embassy-net"]  # MQTT v5 support via rust-mqtt and embassy-net
+calibration = []  # Enable sensor calibration mode
 
 [[bin]]
 name = "fevicol"
@@ -32,8 +33,6 @@ esp-rtos = { version = "0.2.0", features = [
 defmt                  = "1.0.1"
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["defmt", "esp32c6"] }
 
-critical-section = "1.2.0"
-embedded-io = { version = "0.7.1", features = ["defmt"] }
 embedded-io-async = "0.6.1"
 embassy-time = "0.5.0"
 embassy-sync = "0.7.2"
@@ -50,7 +49,6 @@ esp-radio = { version = "0.17.0", features = [
 ] }
 panic-rtt-target = { version = "0.2.0", features = ["defmt"] }
 rtt-target = { version = "0.6.2", features = ["defmt"] }
-nb = "1"
 smoltcp = { version = "0.12.0", default-features = false, features = [
   "defmt",
   "medium-ethernet",
