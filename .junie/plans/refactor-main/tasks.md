@@ -178,55 +178,54 @@ This document provides a detailed task breakdown for implementing the refactorin
 **Dependency**: Best done after Phases 1-2 reduce the file size
 
 #### Sub-phase 4.1: Define Error Types
-- [ ] (Phase 4.1) Create a unified error enum for mqtt_connection_task stages (e.g., `MqttSessionError`)
-- [ ] (Phase 4.1) Add variants for DNS resolution, TCP connection, MQTT connection, and publish errors
-- [ ] (Phase 4.1) Implement `defmt::Format` for the error type for logging
+- [x] (Phase 4.1) Create a unified error enum for mqtt_connection_task stages (e.g., `MqttSessionError`)
+- [x] (Phase 4.1) Add variants for DNS resolution, TCP connection, MQTT connection, and publish errors
+- [x] (Phase 4.1) Implement `defmt::Format` for the error type for logging
 
 #### Sub-phase 4.2: Extract DNS Resolution Helper
-- [ ] (Phase 4.2) Create `resolve_broker_address` async function
-- [ ] (Phase 4.2) Move DNS resolution logic from mqtt_connection_task
-- [ ] (Phase 4.2) Include exponential backoff and IP fallback logic
-- [ ] (Phase 4.2) Return `Result<Ipv4Address, DnsError>` or similar
+- [x] (Phase 4.2) Create `resolve_broker_address` async function
+- [x] (Phase 4.2) Move DNS resolution logic from mqtt_connection_task
+- [x] (Phase 4.2) Include exponential backoff and IP fallback logic
+- [x] (Phase 4.2) Return `Result<Ipv4Address, DnsError>` or similar
 
 #### Sub-phase 4.3: Extract TCP Connection Helper
-- [ ] (Phase 4.3) Create `establish_tcp_connection` async function
-- [ ] (Phase 4.3) Move TCP socket creation and connection logic
-- [ ] (Phase 4.3) Return `Result<TcpSocket, TcpError>` or similar
+- [x] (Phase 4.3) Create `establish_tcp_connection` async function
+- [x] (Phase 4.3) Move TCP socket creation and connection logic
+- [x] (Phase 4.3) Return `Result<TcpSocket, TcpError>` or similar
 
 #### Sub-phase 4.4: Extract MQTT Client Connection Helper
-- [ ] (Phase 4.4) Create `connect_mqtt_client` async function
-- [ ] (Phase 4.4) Move MQTT client initialization and CONNECT handshake logic
-- [ ] (Phase 4.4) Include availability and discovery publishing
-- [ ] (Phase 4.4) Return `Result<RustMqttPublisher, ReasonCode>` or similar
+- [x] (Phase 4.4) Create `connect_mqtt_client` async function
+- [x] (Phase 4.4) Move MQTT client initialization and CONNECT handshake logic
+- [x] (Phase 4.4) Include availability and discovery publishing
+- [x] (Phase 4.4) Return `Result<RustMqttPublisher, ReasonCode>` or similar
 
 #### Sub-phase 4.5: Extract Telemetry Loop Helper
-- [ ] (Phase 4.5) Create `run_telemetry_loop` async function
-- [ ] (Phase 4.5) Move the inner telemetry publishing loop logic
-- [ ] (Phase 4.5) Handle sensor reading reception and MQTT publishing
-- [ ] (Phase 4.5) Return `Result<(), PublishError>` or similar
+- [x] (Phase 4.5) Create `run_telemetry_loop` async function
+- [x] (Phase 4.5) Move the inner telemetry publishing loop logic
+- [x] (Phase 4.5) Handle sensor reading reception and MQTT publishing
+- [x] (Phase 4.5) Return `Result<(), PublishError>` or similar
 
 #### Sub-phase 4.6: Refactor mqtt_connection_task
-- [ ] (Phase 4.6) Refactor mqtt_connection_task to use the new helper functions
-- [ ] (Phase 4.6) Create `run_mqtt_session` function that orchestrates the helpers
-- [ ] (Phase 4.6) Simplify the outer reconnection loop
-- [ ] (Phase 4.6) Reduce nesting depth from 5+ levels to 2-3
+- [x] (Phase 4.6) Refactor mqtt_connection_task to use the new helper functions
+- [x] (Phase 4.6) Create `run_mqtt_session` function that orchestrates the helpers
+- [x] (Phase 4.6) Simplify the outer reconnection loop
+- [x] (Phase 4.6) Reduce nesting depth from 5+ levels to 2-3
 
 #### Sub-phase 4.7: Decide on Helper Function Location
-- [ ] (Phase 4.7) Evaluate whether helpers should stay in `main.rs` or move to `src/mqtt/connection.rs`
-- [ ] (Phase 4.7) If moving, create `src/mqtt/connection.rs` and update `src/mqtt/mod.rs`
-- [ ] (Phase 4.7) Update imports accordingly
+- [x] (Phase 4.7) Evaluate whether helpers should stay in `main.rs` or move to `src/mqtt/connection.rs`
+- [x] (Phase 4.7) If moving, create `src/mqtt/connection.rs` and update `src/mqtt/mod.rs`
+- [x] (Phase 4.7) Update imports accordingly
 
 #### Sub-phase 4.8: Verification and Quality Checks
-- [ ] (Phase 4.8) Run `cargo fmt --all -- --check` and fix any formatting issues
-- [ ] (Phase 4.8) Run `cargo clippy --all-features --workspace -- -D warnings` and address warnings
-- [ ] (Phase 4.8) Run `cargo build --features mqtt` to verify mqtt build
-- [ ] (Phase 4.8) Run `cargo test --no-run` to verify test compilation
-- [ ] (Phase 4.8) Verify no function exceeds 100 lines (success criteria from plan)
+- [x] (Phase 4.8) Run `cargo fmt --all -- --check` and fix any formatting issues
+- [x] (Phase 4.8) Run `cargo clippy --all-features --workspace -- -D warnings` and address warnings
+- [x] (Phase 4.8) Run `cargo build --features mqtt` to verify mqtt build
+- [x] (Phase 4.8) Verify no function exceeds 100 lines (success criteria from plan)
 
 #### Sub-phase 4.9: Documentation Updates
-- [ ] (Phase 4.9) Update `CLAUDE.md` section "Connection Lifecycle" to reflect new function structure
-- [ ] (Phase 4.9) Update `CLAUDE.md` section "Error Handling" if error types changed
-- [ ] (Phase 4.9) Update `guidelines.md` if mqtt_connection_task documentation needs updating
+- [x] (Phase 4.9) Update `CLAUDE.md` section "Connection Lifecycle" to reflect new function structure
+- [x] (Phase 4.9) Update `CLAUDE.md` section "Error Handling" if error types changed
+- [x] (Phase 4.9) Update `guidelines.md` if mqtt_connection_task documentation needs updating
 
 ---
 

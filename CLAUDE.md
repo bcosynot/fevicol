@@ -167,20 +167,43 @@ Implements:
 6. Return `RustMqttPublisher` wrapper implementing `MqttPublish` trait
 
 **Connection Lifecycle** (mqtt_connection_task):
+
+The main task orchestrates the connection lifecycle using helper functions:
+
 1. Wait for network stack to be ready (DHCP assigned IP)
-2. Perform DNS resolution for broker hostname (with exponential backoff and IP fallback)
-3. Establish TCP connection via `embassy_net::tcp::TcpSocket`
-4. Initialize rust-mqtt client with `init_rust_mqtt_client()`
-5. Publish availability as `online` (retained)
-6. Publish Home Assistant discovery messages with 100ms pacing
-7. Send sensor readings from channel to broker
-8. On connection loss: exponential backoff (2s → 30s max) and reconnect
-9. Re-publish discovery on reconnection
+2. **resolve_broker_address()**: Perform DNS resolution for broker hostname
+   - Includes exponential backoff and IP address fallback after 5 consecutive failures
+   - Returns `Result<Ipv4Address, MqttSessionError>`
+3. **establish_tcp_connection()**: Create and connect TCP socket
+   - Allocates TCP RX/TX buffers (2048 bytes each)
+   - Returns `Result<TcpSocket, MqttSessionError>`
+4. **connect_mqtt_client()**: Initialize MQTT client and publish initial messages
+   - Calls `init_rust_mqtt_client()` for CONNECT handshake
+   - Publishes availability as `online` (retained)
+   - Publishes Home Assistant discovery messages
+   - Returns `Result<RustMqttPublisher, MqttSessionError>`
+5. **run_telemetry_loop()**: Receive sensor readings and publish via MQTT
+   - Uses `embassy_futures::select` for sensor readings and 30s health check timeout
+   - Returns `Err(MqttSessionError)` on publish failure
+6. On connection loss: exponential backoff (2s → 30s max) and reconnect
+7. Re-publish discovery on reconnection
+
+**Error Type**: `MqttSessionError` enum with variants for DNS, TCP, MQTT connection, availability, discovery, and telemetry publish failures
 
 **Error Handling**:
-- DNS resolution failures: exponential backoff, fallback to IP address after repeated failures
-- TCP connection failures: exponential backoff (2s, 4s, 8s, 16s, 30s max)
-- MQTT CONNACK errors: logged with reason code interpretation (bad credentials, server unavailable, etc.)
+
+All MQTT connection errors are unified under the `MqttSessionError` enum:
+- `DnsResolutionFailed` / `DnsNoAddresses` / `InvalidIpAddress`: DNS errors with fallback to IP parsing after 5 failures
+- `TcpConnectionFailed`: TCP socket connection errors
+- `MqttConnectFailed(ReasonCode)`: MQTT CONNECT handshake failures with detailed reason code logging
+- `AvailabilityPublishFailed`: Failed to publish online status
+- `DiscoveryPublishFailed`: Failed to publish Home Assistant discovery messages
+- `TelemetryPublishFailed`: Failed to publish sensor readings
+
+Error handling strategy:
+- All errors trigger exponential backoff (2s, 4s, 8s, 16s, 30s max) and automatic reconnection
+- DNS failures: exponential backoff, fallback to IP address parsing after 5 consecutive failures
+- MQTT CONNACK errors: logged with detailed reason code interpretation and troubleshooting guidance
 - Publish failures: trigger reconnection (rust-mqtt v0.3 doesn't expose PUBACK reason codes)
 - Keep-alive timeout: rust-mqtt handles internally, failures trigger reconnection
 - All errors logged via defmt without panicking

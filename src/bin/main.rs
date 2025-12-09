@@ -44,13 +44,13 @@ extern crate alloc;
 
 #[cfg(not(feature = "mqtt"))]
 use fevicol::mqtt::LoggerPublisher;
-#[cfg(feature = "mqtt")]
-use fevicol::mqtt::{
-    EmbassyNetTransport, MqttClientConfig, init_rust_mqtt_client, interpret_connack_reason,
-    MqQos, MqttPublish, build_availability_topic, build_state_topic, publish_discovery,
-};
 #[cfg(not(feature = "mqtt"))]
 use fevicol::mqtt::publish_discovery;
+#[cfg(feature = "mqtt")]
+use fevicol::mqtt::{
+    EmbassyNetTransport, MqQos, MqttClientConfig, MqttPublish, build_availability_topic,
+    build_state_topic, init_rust_mqtt_client, interpret_connack_reason, publish_discovery,
+};
 use fevicol::sensor::{
     MOISTURE_THRESHOLD, SENSOR_DRY, SENSOR_WET, SensorReading, moisture_sensor_task,
 };
@@ -99,6 +99,421 @@ static MQTT_CONNECTION_HEALTHY: AtomicBool = AtomicBool::new(false);
 static STACK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 #[cfg(feature = "mqtt")]
 static NET_STACK: StaticCell<Stack<'static>> = StaticCell::new();
+
+// ----------------------------------------------------------------------------
+// MQTT Session Error Types
+// ----------------------------------------------------------------------------
+
+/// Unified error type for MQTT session lifecycle stages
+#[cfg(feature = "mqtt")]
+#[derive(defmt::Format)]
+enum MqttSessionError {
+    /// DNS resolution failed (no addresses or query error)
+    DnsResolutionFailed,
+    /// DNS returned no addresses
+    DnsNoAddresses,
+    /// Failed to parse broker host as IP address (when DNS fallback is needed)
+    InvalidIpAddress,
+    /// TCP connection failed
+    TcpConnectionFailed,
+    /// MQTT CONNECT handshake failed with a reason code
+    MqttConnectFailed(rust_mqtt::packet::v5::reason_codes::ReasonCode),
+    /// Publishing availability status failed
+    AvailabilityPublishFailed,
+    /// Publishing discovery messages failed
+    DiscoveryPublishFailed,
+    /// Publishing telemetry failed (moisture or raw reading)
+    TelemetryPublishFailed,
+}
+
+// ----------------------------------------------------------------------------
+// MQTT Helper Functions
+// ----------------------------------------------------------------------------
+
+/// Resolves the MQTT broker hostname to an IPv4 address
+///
+/// This function attempts DNS resolution and falls back to parsing the hostname
+/// as an IP address after 5 consecutive DNS failures.
+///
+/// **Parameters**:
+/// - `stack`: embassy-net stack for DNS queries
+/// - `broker_host`: hostname or IP address as a string
+/// - `dns_failure_count`: mutable reference to track consecutive DNS failures
+///
+/// **Returns**:
+/// - `Ok(Ipv4Address)`: Successfully resolved or parsed IPv4 address
+/// - `Err(MqttSessionError)`: DNS resolution failed and fallback unsuccessful
+///
+/// **Error Handling**:
+/// - DNS query errors: Returns `DnsResolutionFailed`
+/// - Empty DNS results: Returns `DnsNoAddresses`
+/// - Invalid IP address (when fallback triggered): Returns `InvalidIpAddress`
+///
+/// **DNS Fallback Strategy**:
+/// After 5 consecutive failures, attempts to parse `broker_host` as an IP address.
+/// This allows operation when DNS is unavailable but an IP is configured.
+#[cfg(feature = "mqtt")]
+async fn resolve_broker_address(
+    stack: &Stack<'static>,
+    broker_host: &str,
+    dns_failure_count: &mut u8,
+) -> Result<smoltcp::wire::Ipv4Address, MqttSessionError> {
+    const DNS_FAILURE_THRESHOLD: u8 = 5;
+
+    info!("mqtt: resolving broker hostname '{}'...", broker_host);
+
+    match stack
+        .dns_query(broker_host, embassy_net::dns::DnsQueryType::A)
+        .await
+    {
+        Ok(addrs) => {
+            if addrs.is_empty() {
+                error!("mqtt: DNS resolution returned no addresses");
+                *dns_failure_count = dns_failure_count.saturating_add(1);
+
+                // After repeated DNS failures, attempt to parse as IP address
+                if *dns_failure_count >= DNS_FAILURE_THRESHOLD {
+                    warn!(
+                        "mqtt: DNS failed {} times, attempting to parse '{}' as IP address",
+                        dns_failure_count, broker_host
+                    );
+                    match broker_host.parse::<smoltcp::wire::Ipv4Address>() {
+                        Ok(ip) => {
+                            info!("mqtt: using IP address directly: {}", ip);
+                            *dns_failure_count = 0;
+                            Ok(ip)
+                        }
+                        Err(_) => {
+                            error!(
+                                "mqtt: '{}' is not a valid IP address, cannot fallback",
+                                broker_host
+                            );
+                            Err(MqttSessionError::InvalidIpAddress)
+                        }
+                    }
+                } else {
+                    Err(MqttSessionError::DnsNoAddresses)
+                }
+            } else {
+                let addr = addrs[0];
+                info!("mqtt: resolved '{}' to {}", broker_host, addr);
+                *dns_failure_count = 0;
+                let smoltcp::wire::IpAddress::Ipv4(ipv4) = addr;
+                Ok(ipv4)
+            }
+        }
+        Err(e) => {
+            error!("mqtt: DNS resolution failed: {:?}", defmt::Debug2Format(&e));
+            *dns_failure_count = dns_failure_count.saturating_add(1);
+
+            // After repeated DNS failures, attempt to parse as IP address
+            if *dns_failure_count >= DNS_FAILURE_THRESHOLD {
+                warn!(
+                    "mqtt: DNS failed {} times, attempting to parse '{}' as IP address",
+                    dns_failure_count, broker_host
+                );
+                match broker_host.parse::<smoltcp::wire::Ipv4Address>() {
+                    Ok(ip) => {
+                        info!("mqtt: using IP address directly: {}", ip);
+                        *dns_failure_count = 0;
+                        Ok(ip)
+                    }
+                    Err(_) => {
+                        error!(
+                            "mqtt: '{}' is not a valid IP address, cannot fallback",
+                            broker_host
+                        );
+                        Err(MqttSessionError::InvalidIpAddress)
+                    }
+                }
+            } else {
+                Err(MqttSessionError::DnsResolutionFailed)
+            }
+        }
+    }
+}
+
+/// Establishes a TCP connection to the MQTT broker
+///
+/// This function creates a TCP socket and connects it to the specified broker address.
+///
+/// **Parameters**:
+/// - `stack`: embassy-net stack for TCP socket operations
+/// - `broker_addr`: resolved IPv4 address of the broker
+/// - `broker_port`: TCP port number of the broker
+/// - `tcp_rx_buffer`: mutable reference to RX buffer (must outlive the socket)
+/// - `tcp_tx_buffer`: mutable reference to TX buffer (must outlive the socket)
+///
+/// **Returns**:
+/// - `Ok(TcpSocket)`: Successfully connected TCP socket
+/// - `Err(MqttSessionError)`: TCP connection failed
+///
+/// **Error Handling**:
+/// - Connection failures can occur due to network unreachability, connection refused,
+///   or timeout. The error is logged with details and wrapped in `TcpConnectionFailed`.
+///
+/// **Configuration**:
+/// - Timeout: 10 seconds for connection establishment
+#[cfg(feature = "mqtt")]
+async fn establish_tcp_connection<'a>(
+    stack: &'a Stack<'static>,
+    broker_addr: smoltcp::wire::Ipv4Address,
+    broker_port: u16,
+    tcp_rx_buffer: &'a mut [u8],
+    tcp_tx_buffer: &'a mut [u8],
+) -> Result<embassy_net::tcp::TcpSocket<'a>, MqttSessionError> {
+    let mut tcp_socket = embassy_net::tcp::TcpSocket::new(*stack, tcp_rx_buffer, tcp_tx_buffer);
+    tcp_socket.set_timeout(Some(Duration::from_secs(10)));
+
+    let remote_endpoint = (broker_addr, broker_port);
+    info!("mqtt: connecting TCP to {}:{}...", broker_addr, broker_port);
+
+    match tcp_socket.connect(remote_endpoint).await {
+        Ok(()) => {
+            info!("mqtt: TCP connected");
+            Ok(tcp_socket)
+        }
+        Err(e) => {
+            // TCP connection failures can occur due to:
+            // - Network unreachable (Wi-Fi disconnected, routing issues)
+            // - Connection refused (broker not running, firewall blocking)
+            // - Timeout (broker overloaded, network congestion)
+            error!("mqtt: TCP connection failed: {:?}", defmt::Debug2Format(&e));
+            Err(MqttSessionError::TcpConnectionFailed)
+        }
+    }
+}
+
+/// Connects to the MQTT broker and publishes initial availability/discovery messages
+///
+/// This function performs the MQTT CONNECT handshake, publishes availability as "online",
+/// and publishes Home Assistant discovery messages.
+///
+/// **Parameters**:
+/// - `tcp_socket`: connected TCP socket
+/// - `mqtt_username`: MQTT username for authentication (can be empty, must have lifetime 'a)
+/// - `mqtt_password`: MQTT password for authentication (can be empty, must have lifetime 'a)
+/// - `lwt_topic`: Last Will Testament topic (must have lifetime 'a)
+/// - `mqtt_recv_buffer`: mutable reference to MQTT receive buffer
+/// - `mqtt_write_buffer`: mutable reference to MQTT write buffer
+///
+/// **Returns**:
+/// - `Ok(RustMqttPublisher)`: Successfully connected MQTT client ready for telemetry
+/// - `Err(MqttSessionError)`: Connection, availability, or discovery publishing failed
+///
+/// **Error Handling**:
+/// - MQTT CONNECT failures: Returns `MqttConnectFailed` with reason code
+/// - Availability publish failures: Returns `AvailabilityPublishFailed`
+/// - Discovery publish failures: Returns `DiscoveryPublishFailed`
+///
+/// **Side Effects**:
+/// - Sets `MQTT_CONNECTION_HEALTHY` atomic flag to true on successful connection
+/// - Signals `MQTT_CONNECTED` to notify other tasks (set to false on error)
+#[cfg(feature = "mqtt")]
+async fn connect_mqtt_client<'a>(
+    tcp_socket: embassy_net::tcp::TcpSocket<'a>,
+    mqtt_username: &'a str,
+    mqtt_password: &'a str,
+    lwt_topic: &'a str,
+    mqtt_recv_buffer: &'a mut [u8],
+    mqtt_write_buffer: &'a mut [u8],
+) -> Result<fevicol::mqtt::RustMqttPublisher<'a, EmbassyNetTransport<'a>>, MqttSessionError> {
+    let transport = EmbassyNetTransport::new(tcp_socket);
+
+    let lwt_payload = b"offline";
+
+    let mqtt_config = MqttClientConfig {
+        client_id: DEVICE_ID,
+        keep_alive_secs: MQTT_KEEP_ALIVE_SECS,
+        session_expiry_secs: MQTT_SESSION_EXPIRY_SECS,
+        username: mqtt_username,
+        password: mqtt_password,
+        lwt_topic,
+        lwt_payload,
+        lwt_retain: true,
+    };
+
+    // Stage 5: MQTT CONNECT handshake
+    let mut client =
+        init_rust_mqtt_client(transport, mqtt_config, mqtt_recv_buffer, mqtt_write_buffer)
+            .await
+            .map_err(|e| {
+                let reason_str = interpret_connack_reason(&e);
+                error!(
+                    "mqtt: MQTT connection failed - reason: {} ({:?})",
+                    reason_str,
+                    defmt::Debug2Format(&e)
+                );
+
+                // Log specific guidance for common errors
+                match e {
+                    rust_mqtt::packet::v5::reason_codes::ReasonCode::BadUserNameOrPassword => {
+                        error!("mqtt: Check MQTT_USERNAME and MQTT_PASSWORD configuration");
+                    }
+                    rust_mqtt::packet::v5::reason_codes::ReasonCode::NotAuthorized => {
+                        error!("mqtt: Client not authorized - check broker ACL configuration");
+                    }
+                    rust_mqtt::packet::v5::reason_codes::ReasonCode::ServerUnavailable
+                    | rust_mqtt::packet::v5::reason_codes::ReasonCode::ServerBusy => {
+                        warn!("mqtt: Broker temporarily unavailable, will retry");
+                    }
+                    rust_mqtt::packet::v5::reason_codes::ReasonCode::ClientIdNotValid => {
+                        error!(
+                            "mqtt: Invalid client ID '{}' - check DEVICE_ID configuration",
+                            DEVICE_ID
+                        );
+                    }
+                    _ => {}
+                }
+
+                MqttSessionError::MqttConnectFailed(e)
+            })?;
+
+    info!("mqtt: connected successfully (MQTT v5)");
+    MQTT_CONNECTION_HEALTHY.store(true, Ordering::Relaxed);
+
+    // Stage 6: Publish availability status (online)
+    info!("mqtt: publishing availability status (online)...");
+    let availability_topic = build_availability_topic(DEVICE_ID);
+    client
+        .publish(
+            availability_topic.as_str(),
+            b"online",
+            MqQos::AtLeastOnce,
+            true,
+        )
+        .await
+        .map_err(|e| {
+            error!("mqtt: availability publish failed: {:?}", e);
+            MQTT_CONNECTION_HEALTHY.store(false, Ordering::Relaxed);
+            MQTT_CONNECTED.signal(false);
+            MqttSessionError::AvailabilityPublishFailed
+        })?;
+
+    // Stage 7: Publish Home Assistant discovery messages
+    info!("mqtt: publishing discovery messages...");
+    publish_discovery(&mut client, DEVICE_ID, SENSOR_ID)
+        .await
+        .map_err(|e| {
+            error!("mqtt: discovery publish failed: {:?}", e);
+            MQTT_CONNECTION_HEALTHY.store(false, Ordering::Relaxed);
+            MQTT_CONNECTED.signal(false);
+            MqttSessionError::DiscoveryPublishFailed
+        })?;
+
+    MQTT_CONNECTED.signal(true);
+    info!("mqtt: ready for telemetry publishing");
+
+    Ok(client)
+}
+
+/// Runs the telemetry publishing loop
+///
+/// This function receives sensor readings from a channel and publishes them via MQTT.
+/// It also performs periodic health checks to detect connection issues.
+///
+/// **Parameters**:
+/// - `client`: mutable reference to connected MQTT client
+/// - `sensor_receiver`: channel receiver for sensor readings
+///
+/// **Returns**:
+/// - `Ok(())`: Loop exited normally (should not happen in normal operation)
+/// - `Err(MqttSessionError)`: Publishing failed, connection should be reestablished
+///
+/// **Error Handling**:
+/// - Payload formatting errors: logged and skipped (continue loop)
+/// - MQTT publish errors: Returns `TelemetryPublishFailed` to trigger reconnection
+///
+/// **Side Effects**:
+/// - Sets `MQTT_CONNECTION_HEALTHY` to false on publish failure
+///
+/// **Loop Behavior**:
+/// - Uses `embassy_futures::select` to handle both sensor readings and 30s health check timeout
+/// - On sensor reading: publishes moisture and raw ADC values
+/// - On timeout: continues (keepalive handled by rust-mqtt internally)
+#[cfg(feature = "mqtt")]
+async fn run_telemetry_loop(
+    client: &mut fevicol::mqtt::RustMqttPublisher<'_, EmbassyNetTransport<'_>>,
+    sensor_receiver: &embassy_sync::channel::Receiver<'_, NoopRawMutex, SensorReading, 20>,
+) -> Result<(), MqttSessionError> {
+    // Connection maintenance and publishing loop
+    //
+    // Error Handling Notes:
+    // - PINGREQ/PINGRESP: rust-mqtt handles keepalive internally based on keep_alive_secs.
+    //   If keepalive timeout occurs, subsequent operations will fail and we'll reconnect.
+    // - PUBACK reason codes: rust-mqtt v0.3 does not expose PUBACK reason codes to the caller.
+    //   Publish failures are detected as generic errors, triggering reconnection.
+    // - DISCONNECT packets: rust-mqtt does not expose server-initiated DISCONNECT packets.
+    //   Connection loss is detected when operations fail, triggering reconnection.
+    // - All errors break the loop and trigger automatic reconnection with exponential backoff.
+    loop {
+        // Use select to handle both sensor readings and periodic health checks
+        match embassy_futures::select::select(
+            sensor_receiver.receive(),
+            Timer::after(Duration::from_secs(30)),
+        )
+        .await
+        {
+            embassy_futures::select::Either::First(reading) => {
+                info!(
+                    "mqtt: publishing - moisture={}%, raw={}, timestamp={}ms",
+                    reading.moisture, reading.raw, reading.timestamp
+                );
+
+                let moisture_topic = build_state_topic(DEVICE_ID, SENSOR_ID, "moisture");
+                let raw_topic = build_state_topic(DEVICE_ID, SENSOR_ID, "raw");
+
+                let mut moisture_payload = String::<16>::new();
+                if write!(&mut moisture_payload, "{}", reading.moisture).is_err() {
+                    error!("mqtt: failed to format moisture payload");
+                    continue;
+                }
+
+                let mut raw_payload = String::<16>::new();
+                if write!(&mut raw_payload, "{}", reading.raw).is_err() {
+                    error!("mqtt: failed to format raw payload");
+                    continue;
+                }
+
+                if let Err(e) = client
+                    .publish(
+                        moisture_topic.as_str(),
+                        moisture_payload.as_bytes(),
+                        MqQos::AtMostOnce,
+                        false,
+                    )
+                    .await
+                {
+                    error!("mqtt: moisture publish failed: {:?}", e);
+                    MQTT_CONNECTION_HEALTHY.store(false, Ordering::Relaxed);
+                    return Err(MqttSessionError::TelemetryPublishFailed);
+                }
+
+                if let Err(e) = client
+                    .publish(
+                        raw_topic.as_str(),
+                        raw_payload.as_bytes(),
+                        MqQos::AtMostOnce,
+                        false,
+                    )
+                    .await
+                {
+                    error!("mqtt: raw publish failed: {:?}", e);
+                    MQTT_CONNECTION_HEALTHY.store(false, Ordering::Relaxed);
+                    return Err(MqttSessionError::TelemetryPublishFailed);
+                }
+
+                info!("mqtt: telemetry published successfully");
+            }
+            embassy_futures::select::Either::Second(_) => {
+                // Periodic health check timeout
+                // rust-mqtt handles keepalive internally.
+                // If the keepalive timeout is exceeded, subsequent operations will fail.
+                // We just continue the loop and wait for the next event.
+            }
+        }
+    }
+}
 
 /// MQTT connection management task: maintains connection to MQTT broker
 ///
@@ -204,93 +619,25 @@ async fn mqtt_connection_task(
         // After 5 consecutive failures, attempt to parse MQTT_BROKER_HOST as an IP address.
         // This allows the system to work even if DNS is broken, as long as an IP is configured.
         let mut dns_failure_count = 0u8;
-        const DNS_FAILURE_THRESHOLD: u8 = 5;
 
         loop {
             info!("mqtt: attempting connection...");
 
-            info!("mqtt: resolving broker hostname '{}'...", mqtt_broker_host);
-            let broker_addr = match stack
-                .dns_query(mqtt_broker_host, embassy_net::dns::DnsQueryType::A)
-                .await
-            {
-                Ok(addrs) => {
-                    if addrs.is_empty() {
-                        error!("mqtt: DNS resolution returned no addresses");
-                        dns_failure_count = dns_failure_count.saturating_add(1);
-
-                        // After repeated DNS failures, attempt to parse as IP address
-                        if dns_failure_count >= DNS_FAILURE_THRESHOLD {
-                            warn!(
-                                "mqtt: DNS failed {} times, attempting to parse '{}' as IP address",
-                                dns_failure_count, mqtt_broker_host
-                            );
-                            match mqtt_broker_host.parse::<smoltcp::wire::Ipv4Address>() {
-                                Ok(ip) => {
-                                    info!("mqtt: using IP address directly: {}", ip);
-                                    dns_failure_count = 0;
-                                    ip
-                                }
-                                Err(_) => {
-                                    error!(
-                                        "mqtt: '{}' is not a valid IP address, cannot fallback",
-                                        mqtt_broker_host
-                                    );
-                                    Timer::after(Duration::from_secs(backoff_secs)).await;
-                                    backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
-                                    continue;
-                                }
-                            }
-                        } else {
-                            Timer::after(Duration::from_secs(backoff_secs)).await;
-                            backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
-                            continue;
-                        }
-                    } else {
-                        let addr = addrs[0];
-                        info!("mqtt: resolved '{}' to {}", mqtt_broker_host, addr);
-                        dns_failure_count = 0;
-                        let smoltcp::wire::IpAddress::Ipv4(ipv4) = addr;
-                        ipv4
-                    }
-                }
-                Err(e) => {
-                    error!(
-                        "mqtt: DNS resolution failed: {:?}, retrying in {}s",
-                        defmt::Debug2Format(&e),
-                        backoff_secs
-                    );
-                    dns_failure_count = dns_failure_count.saturating_add(1);
-
-                    // After repeated DNS failures, attempt to parse as IP address
-                    if dns_failure_count >= DNS_FAILURE_THRESHOLD {
-                        warn!(
-                            "mqtt: DNS failed {} times, attempting to parse '{}' as IP address",
-                            dns_failure_count, mqtt_broker_host
+            // Stage 2: DNS resolution with fallback to IP parsing
+            let broker_addr =
+                match resolve_broker_address(stack, mqtt_broker_host, &mut dns_failure_count).await
+                {
+                    Ok(addr) => addr,
+                    Err(e) => {
+                        error!(
+                            "mqtt: broker address resolution failed: {:?}, retrying in {}s",
+                            e, backoff_secs
                         );
-                        match mqtt_broker_host.parse::<smoltcp::wire::Ipv4Address>() {
-                            Ok(ip) => {
-                                info!("mqtt: using IP address directly: {}", ip);
-                                dns_failure_count = 0;
-                                ip
-                            }
-                            Err(_) => {
-                                error!(
-                                    "mqtt: '{}' is not a valid IP address, cannot fallback",
-                                    mqtt_broker_host
-                                );
-                                Timer::after(Duration::from_secs(backoff_secs)).await;
-                                backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
-                                continue;
-                            }
-                        }
-                    } else {
                         Timer::after(Duration::from_secs(backoff_secs)).await;
                         backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
                         continue;
                     }
-                }
-            };
+                };
 
             // Stage 3: Allocate TCP socket buffers (must outlive the socket and client)
             // Buffer sizing optimized for MQTT usage patterns:
@@ -303,233 +650,78 @@ async fn mqtt_connection_task(
             let mut mqtt_recv_buffer = [0u8; 2048];
             let mut mqtt_write_buffer = [0u8; 2048];
 
-            let mut tcp_socket =
-                embassy_net::tcp::TcpSocket::new(*stack, &mut tcp_rx_buffer, &mut tcp_tx_buffer);
-
-            tcp_socket.set_timeout(Some(Duration::from_secs(10)));
-
-            let remote_endpoint = (broker_addr, mqtt_broker_port);
-            info!(
-                "mqtt: connecting TCP to {}:{}...",
-                broker_addr, mqtt_broker_port
-            );
-            match tcp_socket.connect(remote_endpoint).await {
-                Ok(()) => {
-                    info!("mqtt: TCP connected");
-                }
+            // Stage 4: Establish TCP connection
+            let tcp_socket = match establish_tcp_connection(
+                stack,
+                broker_addr,
+                mqtt_broker_port,
+                &mut tcp_rx_buffer,
+                &mut tcp_tx_buffer,
+            )
+            .await
+            {
+                Ok(socket) => socket,
                 Err(e) => {
-                    // TCP connection failures can occur due to:
-                    // - Network unreachable (Wi-Fi disconnected, routing issues)
-                    // - Connection refused (broker not running, firewall blocking)
-                    // - Timeout (broker overloaded, network congestion)
-                    // Apply exponential backoff and retry
                     error!(
                         "mqtt: TCP connection failed: {:?}, retrying in {}s",
-                        defmt::Debug2Format(&e),
-                        backoff_secs
+                        e, backoff_secs
                     );
                     Timer::after(Duration::from_secs(backoff_secs)).await;
                     backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
                     continue;
                 }
-            }
-
-            let transport = EmbassyNetTransport::new(tcp_socket);
-
-            let lwt_topic = build_availability_topic(DEVICE_ID);
-            let lwt_payload = b"offline";
-
-            let mqtt_config = MqttClientConfig {
-                client_id: DEVICE_ID,
-                keep_alive_secs: MQTT_KEEP_ALIVE_SECS,
-                session_expiry_secs: MQTT_SESSION_EXPIRY_SECS,
-                username: mqtt_username,
-                password: mqtt_password,
-                lwt_topic: lwt_topic.as_str(),
-                lwt_payload,
-                lwt_retain: true,
             };
 
-            match init_rust_mqtt_client(
-                transport,
-                mqtt_config,
+            // Stage 5: Connect MQTT client, publish availability and discovery
+            let lwt_topic = build_availability_topic(DEVICE_ID);
+            let mut client = match connect_mqtt_client(
+                tcp_socket,
+                mqtt_username,
+                mqtt_password,
+                lwt_topic.as_str(),
                 &mut mqtt_recv_buffer,
                 &mut mqtt_write_buffer,
             )
             .await
             {
-                Ok(mut client) => {
-                    info!("mqtt: connected successfully (MQTT v5)");
-
+                Ok(client) => {
                     backoff_secs = 2;
-                    MQTT_CONNECTION_HEALTHY.store(true, Ordering::Relaxed);
-
-                    info!("mqtt: publishing availability status (online)...");
-                    let availability_topic = build_availability_topic(DEVICE_ID);
-                    if let Err(e) = client
-                        .publish(
-                            availability_topic.as_str(),
-                            b"online",
-                            MqQos::AtLeastOnce,
-                            true,
-                        )
-                        .await
-                    {
-                        error!("mqtt: availability publish failed: {:?}", e);
-                        MQTT_CONNECTION_HEALTHY.store(false, Ordering::Relaxed);
-                        MQTT_CONNECTED.signal(false);
-                        info!("mqtt: availability publish failed, will reconnect...");
-                        continue;
-                    }
-
-                    info!("mqtt: publishing discovery messages...");
-                    if let Err(e) = publish_discovery(&mut client, DEVICE_ID, SENSOR_ID).await {
-                        error!("mqtt: discovery publish failed: {:?}", e);
-                        MQTT_CONNECTION_HEALTHY.store(false, Ordering::Relaxed);
-                        MQTT_CONNECTED.signal(false);
-                        info!("mqtt: discovery failed, will reconnect...");
-                        continue;
-                    }
-
-                    MQTT_CONNECTED.signal(true);
-                    info!("mqtt: ready for telemetry publishing");
-
-                    // Connection maintenance and publishing loop
-                    //
-                    // Error Handling Notes:
-                    // - PINGREQ/PINGRESP: rust-mqtt handles keepalive internally based on keep_alive_secs.
-                    //   If keepalive timeout occurs, subsequent operations will fail and we'll reconnect.
-                    // - PUBACK reason codes: rust-mqtt v0.3 does not expose PUBACK reason codes to the caller.
-                    //   Publish failures are detected as generic errors, triggering reconnection.
-                    // - DISCONNECT packets: rust-mqtt does not expose server-initiated DISCONNECT packets.
-                    //   Connection loss is detected when operations fail, triggering reconnection.
-                    // - All errors break the loop and trigger automatic reconnection with exponential backoff.
-                    loop {
-                        // Use select to handle both sensor readings and periodic health checks
-                        match embassy_futures::select::select(
-                            sensor_receiver.receive(),
-                            Timer::after(Duration::from_secs(30)),
-                        )
-                        .await
-                        {
-                            embassy_futures::select::Either::First(reading) => {
-                                info!(
-                                    "mqtt: publishing - moisture={}%, raw={}, timestamp={}ms",
-                                    reading.moisture, reading.raw, reading.timestamp
-                                );
-
-                                let moisture_topic =
-                                    build_state_topic(DEVICE_ID, SENSOR_ID, "moisture");
-                                let raw_topic = build_state_topic(DEVICE_ID, SENSOR_ID, "raw");
-
-                                let mut moisture_payload = String::<16>::new();
-                                if write!(&mut moisture_payload, "{}", reading.moisture).is_err() {
-                                    error!("mqtt: failed to format moisture payload");
-                                    continue;
-                                }
-
-                                let mut raw_payload = String::<16>::new();
-                                if write!(&mut raw_payload, "{}", reading.raw).is_err() {
-                                    error!("mqtt: failed to format raw payload");
-                                    continue;
-                                }
-
-                                if let Err(e) = client
-                                    .publish(
-                                        moisture_topic.as_str(),
-                                        moisture_payload.as_bytes(),
-                                        MqQos::AtMostOnce,
-                                        false,
-                                    )
-                                    .await
-                                {
-                                    error!("mqtt: moisture publish failed: {:?}", e);
-                                    MQTT_CONNECTION_HEALTHY.store(false, Ordering::Relaxed);
-                                    break;
-                                }
-
-                                if let Err(e) = client
-                                    .publish(
-                                        raw_topic.as_str(),
-                                        raw_payload.as_bytes(),
-                                        MqQos::AtMostOnce,
-                                        false,
-                                    )
-                                    .await
-                                {
-                                    error!("mqtt: raw publish failed: {:?}", e);
-                                    MQTT_CONNECTION_HEALTHY.store(false, Ordering::Relaxed);
-                                    break;
-                                }
-
-                                info!("mqtt: telemetry published successfully");
-                            }
-                            embassy_futures::select::Either::Second(_) => {
-                                // Periodic health check timeout
-                                // rust-mqtt handles keepalive internally.
-                                // If the keepalive timeout is exceeded, subsequent operations will fail.
-                                // We just continue the loop and wait for the next event.
-                            }
-                        }
-                    }
-
-                    // If we break from the maintenance loop, attempt to publish offline status
-                    info!("mqtt: publishing availability status (offline)...");
-                    let availability_topic = build_availability_topic(DEVICE_ID);
-                    if let Err(e) = client
-                        .publish(
-                            availability_topic.as_str(),
-                            b"offline",
-                            MqQos::AtLeastOnce,
-                            true,
-                        )
-                        .await
-                    {
-                        warn!(
-                            "mqtt: offline availability publish failed (expected if connection broken): {:?}",
-                            e
-                        );
-                    }
-
-                    MQTT_CONNECTED.signal(false);
-                    info!("mqtt: disconnected, will reconnect...");
+                    client
                 }
                 Err(e) => {
-                    // Provide detailed error diagnostics for MQTT v5 CONNACK reason codes
-                    let reason_str = interpret_connack_reason(&e);
                     error!(
-                        "mqtt: MQTT connection failed - reason: {} ({:?}), retrying in {}s",
-                        reason_str,
-                        defmt::Debug2Format(&e),
-                        backoff_secs
+                        "mqtt: client connection failed: {:?}, retrying in {}s",
+                        e, backoff_secs
                     );
-
-                    // Log specific guidance for common errors
-                    match e {
-                        rust_mqtt::packet::v5::reason_codes::ReasonCode::BadUserNameOrPassword => {
-                            error!("mqtt: Check MQTT_USERNAME and MQTT_PASSWORD configuration");
-                        }
-                        rust_mqtt::packet::v5::reason_codes::ReasonCode::NotAuthorized => {
-                            error!("mqtt: Client not authorized - check broker ACL configuration");
-                        }
-                        rust_mqtt::packet::v5::reason_codes::ReasonCode::ServerUnavailable
-                        | rust_mqtt::packet::v5::reason_codes::ReasonCode::ServerBusy => {
-                            warn!("mqtt: Broker temporarily unavailable, will retry");
-                        }
-                        rust_mqtt::packet::v5::reason_codes::ReasonCode::ClientIdNotValid => {
-                            error!(
-                                "mqtt: Invalid client ID '{}' - check DEVICE_ID configuration",
-                                DEVICE_ID
-                            );
-                        }
-                        _ => {}
-                    }
-
-                    MQTT_CONNECTED.signal(false);
                     Timer::after(Duration::from_secs(backoff_secs)).await;
                     backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
+                    continue;
                 }
+            };
+
+            // Stage 6: Run telemetry publishing loop
+            let _ = run_telemetry_loop(&mut client, &sensor_receiver).await;
+
+            // If we exit from the telemetry loop, attempt to publish offline status
+            info!("mqtt: publishing availability status (offline)...");
+            let availability_topic = build_availability_topic(DEVICE_ID);
+            if let Err(e) = client
+                .publish(
+                    availability_topic.as_str(),
+                    b"offline",
+                    MqQos::AtLeastOnce,
+                    true,
+                )
+                .await
+            {
+                warn!(
+                    "mqtt: offline availability publish failed (expected if connection broken): {:?}",
+                    e
+                );
             }
+
+            MQTT_CONNECTED.signal(false);
+            info!("mqtt: disconnected, will reconnect...");
         }
     }
 
