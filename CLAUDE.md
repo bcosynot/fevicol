@@ -26,13 +26,17 @@ The name is a nod to the classic Fevicol adhesive commercial where a woman hangi
    - Calibrated range: dry (2188) to wet (4095)
    - Real-time percentage conversion (0-100%)
    - Configurable threshold monitoring (currently 30%)
-2. **Wi-Fi Connectivity**: ✅ STA mode connection with auto-reconnect
+2. **Wi-Fi Connectivity**: ✅ STA mode connection with auto-reconnect and recovery
    - embassy-net stack with DHCP for automatic IP assignment
    - DNS resolution for broker hostname with fallback to IP address
    - Exponential backoff reconnection on Wi-Fi failures
+   - Connection timeout (30s) with automatic driver restart on stuck state
+   - After 3 consecutive reconnect failures, automatically restarts Wi-Fi driver
+   - Protects against Wi-Fi driver getting into hung state requiring power cycle
 3. **MQTT v5 Integration**: ✅ Full MQTT v5 implementation with rust-mqtt v0.3
    - MQTT v5 protocol with session expiry (3600s) and authentication
-   - Client ID format: `fevicol-{DEVICE_ID}`
+   - Unique device ID generated from MAC address (format: `fevicol-XXXXXX` where XXXXXX is last 3 MAC bytes in hex)
+   - Client ID uses MAC-based device ID for automatic per-device uniqueness
    - Crate-agnostic client interface: `MqQos` + `MqttPublish` trait
    - TCP connection via `EmbassyNetTransport` adapter for `embassy_net::tcp::TcpSocket`
    - Last Will Testament (LWT): `fevicol/{device_id}/status` = `offline` (retained)
@@ -330,6 +334,26 @@ The project uses Embassy's cooperative scheduler via `esp-rtos`:
 3. *(Optional)* Create BLE transport with `BleConnector::new()` and initialize `trouble-host` stack
 
 The radio initialization handle is shared between Wi-Fi and BLE (required for COEX). For this project, only Wi-Fi is needed for MQTT connectivity to Home Assistant.
+
+### Device Identification
+
+**Unique Device ID Generation**:
+- Device IDs are automatically generated from the ESP32-C6's MAC address at boot
+- Format: `fevicol-XXXXXX` where XXXXXX is the last 3 bytes of the MAC address in lowercase hex
+- Example: MAC `AA:BB:CC:DD:EE:FF` → device ID `fevicol-ddeeff`
+- This ensures each device has a unique ID without manual configuration
+- **Safety**: If formatting fails (should never happen), the device panics immediately to prevent ID conflicts instead of using a fallback ID
+
+**Benefits**:
+- No ID conflicts when running multiple devices on the same MQTT broker
+- Each device appears as a separate device in Home Assistant
+- No manual per-device configuration needed when flashing firmware
+
+**Home Assistant Integration**:
+- Devices appear with names like "Fevicol Plant Monitor - fevicol-a1b2c3"
+- Users can rename devices in Home Assistant UI (Settings → Devices & Services → MQTT)
+- Devices can be assigned to Areas (Living Room, Kitchen, etc.) for organization
+- Sensor entities can be individually renamed (e.g., "Living Room Ficus Moisture")
 
 ### Application Architecture
 

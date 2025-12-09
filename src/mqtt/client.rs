@@ -162,9 +162,14 @@ impl<'a, T: Read + IoWrite> MqttPublish for RustMqttPublisher<'a, T> {
             retain
         );
 
-        self.client
-            .send_message(topic, payload, mqtt_qos, retain)
-            .await
+        match self.client.send_message(topic, payload, mqtt_qos, retain).await {
+            Ok(()) => Ok(()),
+            Err(ReasonCode::NoMatchingSubscribers) => {
+                // This is a success-message published but no subscribers
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
